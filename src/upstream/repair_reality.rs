@@ -1,6 +1,5 @@
 use super::{line::normalized_inbound, share_link, PanelApi};
 use anyhow::{ensure, Context, Result};
-use reqwest::Method;
 use serde_json::{json, Value};
 
 // 3x-ui updates the entire inbound, including its embedded client record.
@@ -18,30 +17,6 @@ fn client_settings_agree(embedded: &Value, client: &Value) -> bool {
 }
 
 impl PanelApi {
-    pub async fn test_line_outbound(&self, tag: &str) -> Result<i64> {
-        let config = self.config().await?;
-        let outbounds = config["outbounds"].as_array().context("无法读取出站列表")?;
-        let outbound = outbounds
-            .iter()
-            .find(|o| o["tag"] == tag && o["protocol"] == "socks")
-            .context("面板缺少这条线路的同名 SOCKS5 出站")?;
-        // The official HTTP test uses the test URL configured on this panel.
-        let reply = self
-            .obj(self.request(Method::POST, "xray/testOutbound").form(&[
-                ("outbound", outbound.to_string()),
-                ("allOutbounds", config["outbounds"].to_string()),
-            ]))
-            .await?;
-        ensure!(
-            reply["success"] == true,
-            "面板经此 SOCKS5 出口访问测试网址失败，请核对出口地址、账号密码和面板的出站测试网址"
-        );
-        reply["delay"]
-            .as_i64()
-            .filter(|ms| *ms >= 0)
-            .context("面板未返回有效的出口测试延迟")
-    }
-
     pub async fn repair_line_reality(
         &self,
         id: u64,

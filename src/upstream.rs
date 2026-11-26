@@ -13,9 +13,11 @@ pub struct BackupFile {
 mod actions;
 mod delete;
 mod line;
+mod outbound_probe;
 mod reality;
 mod repair_reality;
 pub(crate) use line::share_link;
+pub(crate) use outbound_probe::ProbeMode;
 
 pub(crate) fn default_reality_target() -> String {
     std::env::var("NEXUS_REALITY_TARGET").unwrap_or_else(|_| "www.amd.com:443".into())

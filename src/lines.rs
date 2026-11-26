@@ -335,7 +335,7 @@ pub async fn test_outbound(
     let api = panel.api(&app.client)?;
     let _slot = app.upstream_slots.acquire().await.expect("open semaphore");
     let delay = api
-        .test_line_outbound(row.get("client_email"))
+        .test_socks_outbound(row.get("client_email"), crate::upstream::ProbeMode::Http)
         .await
         .map_err(ApiError::upstream)?;
     Ok(Json(json!({"delay":delay})))

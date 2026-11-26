@@ -174,6 +174,59 @@ async fn panel(app: Router) -> PanelApi {
 }
 
 #[tokio::test]
+async fn socks_probes_use_stored_configs_native_modes_and_per_tag_results() {
+    fn config() -> Value {
+        json!([
+            {"protocol":"socks","tag":"节点 A","settings":{"servers":[{
+                "address":"edge.example","port":1080,"users":[{"user":"example","pass":"fixture-secret"}]
+            }]}},
+            {"protocol":"socks","tag":"B"},
+            {"protocol":"freedom","tag":"direct"},
+            {"protocol":"socks","tag":"dup"},
+            {"protocol":"socks","tag":"dup"}
+        ])
+    }
+    let app = Router::new()
+        .route("/private/path/panel/api/xray/", post(|| async {
+            ok(json!({"xraySetting":{"outbounds":config()}}))
+        }))
+        .route("/private/path/panel/api/xray/testOutbound", post(|Form(form): Form<HashMap<String,String>>| async move {
+            assert_eq!(form["mode"], "tcp");
+            assert_eq!(serde_json::from_str::<Value>(&form["outbound"]).unwrap(), config()[0]);
+            assert_eq!(serde_json::from_str::<Value>(&form["allOutbounds"]).unwrap(), config());
+            ok(json!({"success":true,"delay":0,"mode":"tcp","tag":"节点 A"}))
+        }))
+        .route("/private/path/panel/api/xray/testOutbounds", post(|Form(form): Form<HashMap<String,String>>| async move {
+            assert_eq!(form["mode"], "http");
+            let sent: Value = serde_json::from_str(&form["outbounds"]).unwrap();
+            assert_eq!(sent, json!([config()[1],config()[0]]));
+            ok(json!([
+                {"success":false,"error":"Xray process exited: fixture-secret","tag":"B","mode":"http"},
+                {"success":true,"delay":1172,"tag":"节点 A","mode":"http"}
+            ]))
+        }));
+    let api = panel(app).await;
+    assert_eq!(
+        api.test_socks_outbound("节点 A", ProbeMode::Tcp)
+            .await
+            .unwrap(),
+        0
+    );
+    let results = api
+        .test_socks_batch(
+            &["B", "missing", "direct", "节点 A", "dup"],
+            ProbeMode::Http,
+        )
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 5);
+    assert_eq!(results[3], Ok(1172));
+    for index in [0, 1, 2, 4] {
+        assert!(!results[index].unwrap_err().contains("fixture-secret"));
+    }
+}
+
+#[tokio::test]
 async fn client_expiry_preserves_credentials_and_quota() {
     let api = panel(Router::new()
         .route("/private/path/panel/api/clients/get/:email", get(|headers: HeaderMap, Path(email): Path<String>| async move {

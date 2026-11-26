@@ -458,10 +458,125 @@
       identifiers(rule.user).forEach(user=>matches.users.add(user));
       identifiers(rule.inboundTag).forEach(tag=>matches.inbounds.add(tag));
     }
-    return list(config.outbounds).map(outbound=>{
+    const outbounds=list(config.outbounds), tagCounts=new Map();
+    for (const o of outbounds) tagCounts.set(o.tag,(tagCounts.get(o.tag)||0)+1);
+    return outbounds.map(outbound=>{
       const matches=byTag.get(outbound.tag);
-      return {panel,outbound,users:[...(matches?.users||[])],inboundTags:[...(matches?.inbounds||[])]};
+      const canTest=outbound.protocol==='socks' && typeof outbound.tag==='string' &&
+        outbound.tag.trim()!=='' && tagCounts.get(outbound.tag)===1;
+      return {panel,outbound,canTest,users:[...(matches?.users||[])],inboundTags:[...(matches?.inbounds||[])]};
     });
+  }
+  function outboundTests(ctx,root,rowAt) {
+    const controls=root.querySelector('[data-outbound-tests]');
+    controls.innerHTML=`<div class="wf-test-controls">
+      <div class="wf-test-modes" role="group" aria-label="延迟测试方式">
+        <button type="button" data-test-mode="tcp" aria-pressed="true" title="连接 SOCKS5 服务器的 TCP 端口">TCP</button>
+        <button type="button" data-test-mode="http" aria-pressed="false" title="通过 SOCKS5 出站请求面板的测试网址">HTTP</button>
+      </div><button type="button" class="wf-button" data-test-all disabled>${ctx.icon('play',15)}全部测试</button>
+      </div><small class="wf-test-progress" data-test-progress role="status"></small>`;
+    const all=controls.querySelector('[data-test-all]'), progress=controls.querySelector('[data-test-progress]');
+    const modeButtons=[...controls.querySelectorAll('[data-test-mode]')];
+    const results={tcp:new Map(),http:new Map()};
+    let mode='tcp', targets=[], busy=false;
+    function update() {
+      if (!root.isConnected) return;
+      all.disabled=ctx.state.demo || busy || !targets.length;
+      all.title=`测试当前筛选中的 ${targets.length} 个 SOCKS5 出站（含所有分页）`;
+      for (const button of modeButtons) {
+        button.disabled=busy;
+        button.setAttribute('aria-pressed',String(mode===button.dataset.testMode));
+      }
+      for (const cell of root.querySelectorAll('[data-test-result]')) {
+        const row=rowAt(Number(cell.dataset.testResult)), result=results[mode].get(row);
+        const button=cell.closest('tr').querySelector('[data-wf-row="outbound.test"]');
+        button.disabled=ctx.state.demo || busy || !row.canTest;
+        let reason='';
+        if (ctx.state.demo) reason='演示工作区没有真实测试结果';
+        else if (row.outbound.protocol!=='socks') reason='仅支持 SOCKS5 出站';
+        else if (!row.canTest) reason='测试需要唯一的出站标签';
+        button.title=reason || `测试 ${row.outbound.tag} 的 ${mode.toUpperCase()} 延迟`;
+        button.setAttribute('aria-label',button.title);
+        if (result?.error) {
+          cell.innerHTML=`${badge('失败','fail')}<small class="wf-test-error">${esc(result.error)}</small>`;
+        } else if (result?.latencyMs!=null) {
+          cell.innerHTML=badge(`${result.latencyMs} ms`,'good');
+        } else {
+          cell.textContent=result?.status || '—';
+        }
+      }
+    }
+    async function probe(group,batch) {
+      const url=`/api/panels/${encodeURIComponent(group[0].panel.id)}/outbounds/test`;
+      if (!batch) {
+        const tag=group[0].outbound.tag;
+        const reply=await ctx.api(url,{method:'POST',body:{tag,mode}});
+        return [{tag,latencyMs:reply?.latencyMs}];
+      }
+      const tags=group.map(row=>row.outbound.tag);
+      const reply=await ctx.api(url+'-batch',{method:'POST',body:{tags,mode}});
+      return list(reply?.results);
+    }
+    async function run(items,batch) {
+      if (busy || ctx.state.demo || !items.length) return;
+      busy=true;
+      const byPanel=new Map(), records=results[mode];
+      let done=0, failed=0;
+      for (const row of items) {
+        if (!byPanel.has(row.panel.id)) byPanel.set(row.panel.id,[]);
+        byPanel.get(row.panel.id).push(row);
+        records.set(row,{status:'等待测试'});
+      }
+      const remaining=byPanel.values(), chunkSize=mode==='tcp' ? 50 : 3;
+      progress.textContent=`已测 0 / ${items.length}`;
+      async function worker() {
+        for (const panelRows of remaining) {
+          for (let start=0;start<panelRows.length;start+=chunkSize) {
+            if (!root.isConnected) return;
+            const group=panelRows.slice(start,start+chunkSize);
+            for (const row of group) records.set(row,{status:'测试中…'});
+            update();
+            try {
+              const replies=await probe(group,batch);
+              const byTag=new Map(replies.map(result=>[result.tag,result]));
+              for (const row of group) {
+                const result=byTag.get(row.outbound.tag);
+                if (!result?.error && Number.isSafeInteger(result?.latencyMs) && result.latencyMs>=0) {
+                  records.set(row,{latencyMs:result.latencyMs});
+                } else {
+                  records.set(row,{error:result?.error || '面板未返回有效延迟'});
+                  failed++;
+                }
+              }
+            } catch (err) {
+              for (const row of group) records.set(row,{error:err.message || '测试失败'});
+              failed+=group.length;
+            }
+            done+=group.length;
+            progress.textContent=`已测 ${done} / ${items.length}${failed ? ' · 失败 '+failed : ''}`;
+            update();
+          }
+        }
+      }
+      try {
+        await Promise.all(Array.from({length:Math.min(3,byPanel.size)},worker));
+      } finally {
+        busy=false;
+        update();
+      }
+    }
+    for (const button of modeButtons) button.onclick=()=>{
+      if (busy) return;
+      mode=button.dataset.testMode;
+      if (!ctx.state.demo) progress.textContent='';
+      update();
+    };
+    if (ctx.state.demo) progress.textContent='切换至实际工作区可测试延迟';
+    all.onclick=()=>run(targets,true);
+    return {
+      setScope(filtered) { targets=filtered.map(item=>item.r).filter(row=>row.canTest); update(); },
+      single(row) { if (row.canTest) return run([row],false); }
+    };
   }
   function repairRoutes(ctx,panelId) {
     const options=ctx.state.panels.map(p=>`<option value="${esc(p.id)}" ${p.id===panelId?'selected':''}>${esc(p.name)}</option>`).join('');
@@ -501,7 +616,7 @@
     panels:['面板名称','面板入口','地区','连接状态','入站','客户端','操作'],
     backups:['面板名称','地区','连接状态','操作'],
     inbounds:['入站名称','所属面板','协议','到期时间','状态','操作'],
-    outbounds:['出站标签','规则中的用户','入站标签匹配','所属面板','协议','操作'],
+    outbounds:['出站标签','规则中的用户','入站标签匹配','所属面板','协议','延迟','操作'],
     routes:['优先级','用户','出站','入站标签','其他条件','所属面板','操作'],
     activity:['操作类型','执行时间','涉及面板','执行结果','操作']
   };
@@ -540,7 +655,9 @@
     if(page==='panels')return [entity(ctx,'server',p.name,p.url),panelAccess(ctx,p),esc(p.region||'—'),online(),esc(p.inbounds??'—'),esc(p.clients??'—'),'<div class="wf-panel-actions">'+refLink('panel-detail',index,'详情')+refLink('panel-sync',index,'同步')+refLink('panel-remove',index,'删除')+'</div>'];
     if(page==='backups')return [entity(ctx,'database',p.name,p.url),esc(p.region||'—'),online(),refLink('download-one',index,'下载备份')];
     if(page==='inbounds')return [entity(ctx,'log-in',i.remark||'未命名入站',`:${i.port} · #${i.id}`),esc(p.name),badge(String(i.protocol||'—').toUpperCase()),esc(date(i.expiryTime||0)),badge(i.enable===false?'停用':'启用',i.enable===false?'neutral':'good'),refLink('inbound.expiry',index,'修改有效期')];
-    if(page==='outbounds')return [entity(ctx,'log-out',o.tag||'未命名出站'),esc(row.users.join('、')||'—'),esc(row.inboundTags.join('、')||'—'),esc(p.name),badge(o.protocol||'—'),refLink('outbound.upsert',index,'编辑')];
+    if(page==='outbounds')return [entity(ctx,'log-out',o.tag||'未命名出站'),esc(row.users.join('、')||'—'),esc(row.inboundTags.join('、')||'—'),esc(p.name),badge(o.protocol||'—'),
+      `<span class="wf-test-result" data-test-result="${index}">—</span>`,
+      `<div class="wf-panel-actions"><button type="button" class="wf-icon-button wf-test-one" data-wf-row="outbound.test" data-wf-index="${index}" disabled>${ctx.icon('zap',15)}</button>${refLink('outbound.upsert',index,'编辑')}</div>`];
     if(page==='routes'){
       const match=ruleSelector(r);
       return [`<strong>#${row.index+1}</strong>`,esc(identifiers(r.user).join('、')||'—'),badge(r.outboundTag||(r.balancerTag?`均衡器 · ${r.balancerTag}`:'—')),esc(identifiers(r.inboundTag).join('、')||'—'),`<span class="wf-rule-condition" title="${esc(match)}">${esc(match)}</span>`,esc(p.name),refLink('route.upsert',index,'编辑')];
@@ -576,6 +693,12 @@
     host.innerHTML=`<div class="wf-page"><div class="wf-heading"><div><h1>${esc(title)}</h1><p>${esc(workspace)} · ${ctx.state.panels.length} 个面板</p></div><div class="wf-actions">${headingBtns}</div></div><div class="wf-banners" role="status"></div><section class="wf-surface"><div class="wf-subhead"><div class="wf-row"><h2>${esc(subtitle)}</h2><span class="wf-count" data-count></span></div>${page==='backups'?button(ctx,'选择面板','backup','list-checks'):''}</div>${page==='backups'?`<div class="wf-backup-help">${ctx.icon('database')}<div><b>${ctx.state.demo?'演示配置快照':'3x-ui 数据库备份'}</b><p>${ctx.state.demo?'JSON · 示例工作区':'单个面板下载数据库，多选或全部备份下载 ZIP 压缩包。'}</p></div></div>`:''}<div class="wf-toolbar"><label class="wf-search">${ctx.icon('search',15)}<input data-search type="search" placeholder="搜索${esc(unit)}" aria-label="搜索${esc(unit)}"></label>${scoped?`<select class="wf-select" data-filter aria-label="按面板筛选"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>`:''}</div><div data-list class="wf-loading">正在读取…</div><div data-pages></div></section></div>`;
     const root=host.querySelector('.wf-page'),listRoot=root.querySelector('[data-list]'),pag=root.querySelector('[data-pages]');
     let rows=[],slice=0,ready=false;
+    let tests;
+    if (page==='outbounds') {
+      root.classList.add('wf-outbounds');
+      root.querySelector('.wf-subhead').insertAdjacentHTML('beforeend','<div data-outbound-tests></div>');
+      tests=outboundTests(ctx,root,index=>rows[index]);
+    }
     root.querySelectorAll('[data-wf-open]').forEach(btn=>btn.onclick=()=>open(btn.dataset.wfOpen,ctx,{panelId:root.querySelector('[data-filter]')?.value||''}));
     const errors=[];
     function draw(){
@@ -592,6 +715,7 @@
       pag.innerHTML=`<div class="wf-pagination"><span>共 ${count} 项</span>${nPages>1?`<div class="wf-row"><button class="wf-icon-button" data-prev aria-label="上一页" ${slice===0?'disabled':''}>${ctx.icon('chevron-left')}</button><span>${slice+1} / ${nPages}</span><button class="wf-icon-button" data-next aria-label="下一页" ${slice+1===nPages?'disabled':''}>${ctx.icon('chevron-right')}</button></div>`:''}</div>`;
       const prev=pag.querySelector('[data-prev]'),next=pag.querySelector('[data-next]');
       if(prev)prev.onclick=()=>{slice--;draw();};if(next)next.onclick=()=>{slice++;draw();};
+      tests?.setScope(filtered);
     }
     root.querySelector('[data-search]').oninput=()=>{slice=0;draw();};
     const filter=root.querySelector('[data-filter]');
@@ -601,6 +725,7 @@
       if(!btn)return;
       const row=rows[Number(btn.dataset.wfIndex)],a=btn.dataset.wfRow;
       if(!row)return;
+      if(a==='outbound.test')return tests.single(row);
       if(a==='item-history')return operationResults(ctx,labels[row.event.action]||row.event.action,list(row.event.results));
       open(a,ctx,{...row,panelId:row.panel.id});
     });

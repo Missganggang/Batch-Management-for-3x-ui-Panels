@@ -1,6 +1,7 @@
 mod batch;
 mod clients;
 mod lines;
+mod outbounds;
 mod server;
 mod storage;
 mod sync;
@@ -115,6 +116,11 @@ async fn main() -> Result<()> {
             post(lines::repair_user_routes),
         )
         .route("/api/panels/:id/client-links", get(clients::links))
+        .route("/api/panels/:id/outbounds/test", post(outbounds::test))
+        .route(
+            "/api/panels/:id/outbounds/test-batch",
+            post(outbounds::test_batch),
+        )
         .route("/api/clients/delete", post(clients::delete))
         .route("/api/clients/export-xlsx", post(clients::export))
         .route("/api/clients/extend", post(clients::extend))

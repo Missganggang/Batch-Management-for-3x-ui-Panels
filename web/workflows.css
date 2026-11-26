@@ -124,6 +124,18 @@
 .wf-clients .wf-table td>small,.wf-binding-list span,.wf-delete-targets small,.wf-pending small {display:block}
 .wf-binding-list {line-height:1.65}
 .wf-client-share {display:grid;justify-items:start;gap:6px}
+.wf-outbounds .wf-subhead {flex-wrap:wrap}
+.wf-test-controls,.wf-test-modes {display:flex;align-items:center}
+.wf-test-controls {gap:10px}
+.wf-test-modes {gap:2px;padding:3px;border-radius:8px;background:#f0f1f6}
+.wf-test-modes button {border:0;border-radius:5px;padding:5px 11px;background:transparent;color:var(--wf-muted);cursor:pointer;font-size:12px;font-weight:600}
+.wf-test-modes button[aria-pressed=true] {background:#fff;color:var(--wf-accent);box-shadow:0 1px 3px #21213d21}
+.wf-test-progress {display:block;margin-top:4px;text-align:right;color:var(--wf-muted);font-size:12px}
+.wf-test-progress:empty {display:none}
+.wf-test-result {display:inline-grid;justify-items:start;gap:2px;color:var(--wf-muted);font-variant-numeric:tabular-nums}
+.wf-test-error {max-width:16em;color:#984b48;font-size:12px;white-space:normal;overflow-wrap:anywhere}
+.wf-test-one {background:var(--wf-soft);color:var(--wf-accent)}
+.wf-test-one:disabled {background:#f1f2f6;color:#808798}
 .wf-client-share select {max-width:190px}
 .wf-delete-targets {list-style:none;overflow:auto;max-height:42vh;padding:0 12px;margin:0;border:1px solid var(--wf-line);border-radius:8px}
 .wf-delete-targets li {padding:8px 0;overflow-wrap:anywhere}

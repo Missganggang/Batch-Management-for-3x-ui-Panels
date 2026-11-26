@@ -199,6 +199,7 @@ enum BackupMode {
     Single,
     #[default]
     Archive,
+    All,
 }
 
 fn backup_day(date: Option<&str>) -> ApiResult<chrono::NaiveDate> {
@@ -245,7 +246,7 @@ fn file_host(url: &str) -> String {
 fn download(
     file: std::fs::File,
     size: u64,
-    name: &str,
+    disposition: String,
     mime: &str,
     ok: usize,
     failed: usize,
@@ -254,10 +255,7 @@ fn download(
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, mime)
         .header(header::CONTENT_LENGTH, size)
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{name}\""),
-        )
+        .header(header::CONTENT_DISPOSITION, disposition)
         .header("x-backup-success", ok)
         .header("x-backup-failed", failed)
         .body(body)
@@ -318,7 +316,7 @@ pub(crate) async fn backup(
                     return download(
                         backup.file,
                         backup.size,
-                        &name,
+                        format!("attachment; filename=\"{name}\""),
                         "application/octet-stream",
                         1,
                         0,
@@ -370,14 +368,20 @@ pub(crate) async fn backup(
     let size = file.metadata().context("读取归档大小失败")?.len();
     file.rewind().context("读取归档失败")?;
     storage::log_finish(&app.db, &job, &results).await?;
-    let mut prefix = archive_hosts.join("+");
-    if prefix.len() > 180 {
-        prefix = format!("{}+{}-more", archive_hosts[0], archive_hosts.len() - 1);
-    }
+    let disposition = if req.mode == BackupMode::All {
+        // RFC 8187 UTF-8 filename for 汇总, with an ASCII fallback.
+        format!("attachment; filename=\"summary-{date}.zip\"; filename*=UTF-8''%E6%B1%87%E6%80%BB{date}.zip")
+    } else {
+        let mut prefix = archive_hosts.join("+");
+        if prefix.len() > 180 {
+            prefix = format!("{}+{}-more", archive_hosts[0], archive_hosts.len() - 1);
+        }
+        format!("attachment; filename=\"{prefix}-{date}.zip\"")
+    };
     download(
         file,
         size,
-        &format!("{prefix}-{date}.zip"),
+        disposition,
         "application/zip",
         files.len(),
         results.len() - files.len(),

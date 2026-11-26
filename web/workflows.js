@@ -114,7 +114,7 @@
     const pairs=[['面板名称',panel.name],['面板备注',panel.note||'—'],['面板地址',panel.url||'—'],['地区',panel.region||'—'],['连接状态',panel.online===true?'在线':panel.online===false?'离线':'待同步'],['入站数量',panel.inbounds??'—'],['客户端数量',panel.clients??'—']];
     const body=`<dl class="wf-detail-list">${pairs.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`;
     const el=modal(ctx,panel.name,'server',body,`<button type="button" class="wf-button wf-danger-link" data-remove>删除面板</button><button type="button" class="wf-button" data-panel-sync>同步</button><button type="button" class="wf-button wf-primary" data-backup>${ctx.icon('download')}备份面板</button>`);
-    el.querySelector('[data-backup]').onclick=()=>backup(ctx,panel.id,true);
+    el.querySelector('[data-backup]').onclick=()=>backup(ctx,panel.id,{immediate:true});
     el.querySelector('[data-panel-sync]').onclick=()=>showSync(ctx,panel);
     el.querySelector('[data-remove]').onclick=()=>removePanel(ctx,panel);
   }
@@ -358,7 +358,7 @@
     if(!name)throw new Error('服务器未返回备份文件名，请刷新后重试');
     return name;
   }
-  function backup(ctx,panelId,immediate=false) {
+  function backup(ctx,panelId,{mode=panelId?'single':'archive',immediate=false}={}) {
     const body=`<form id="wf-form" class="wf-form"><div class="wf-spread"><b>选择备份面板</b><label class="wf-check"><input type="checkbox" data-all>全选</label></div><div class="wf-targets">${targetRows(ctx,panelId,!!panelId)}</div><p class="wf-hint">${panelId?'下载此面板的原始数据库文件。':'每个面板的数据库将合并为一个 ZIP 文件，其中包含备份结果清单。'}</p><div class="wf-inline-error" role="alert"></div></form>`;
     const el=modal(ctx,'下载面板备份','database',body,submitFooter('下载备份'));
     const all=el.querySelector('[data-all]'),checks=[...el.querySelectorAll('[data-target]')];
@@ -371,7 +371,7 @@
       if(!ids.length||ids.length>128)throw new Error('请选择 1 至 128 个面板');
       const now=new Date();
       const stamp=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');
-      const res=await fetch('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({panelIds:ids,mode:panelId?'single':'archive',date:stamp})});
+      const res=await fetch('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({panelIds:ids,mode,date:stamp})});
       if(!res.ok)throw new Error((await res.json().catch(()=>({}))).error||`备份失败（${res.status}）`);
       const ok=Number(res.headers.get('x-backup-success')),fail=Number(res.headers.get('x-backup-failed'));
       const filename=downloadName(res.headers.get('Content-Disposition'));
@@ -666,8 +666,8 @@
       case 'panel-sync':return showSync(ctx,ctx.state.panels.find(p=>p.id===params.panelId));
       case 'panel-remove':return removePanel(ctx,ctx.state.panels.find(p=>p.id===params.panelId));
       case 'backup':return backup(ctx,params.panelId);
-      case 'download-all':
-      case 'download-one':return backup(ctx,params.panelId,true);
+      case 'download-all':return backup(ctx,null,{mode:'all',immediate:true});
+      case 'download-one':return backup(ctx,params.panelId,{immediate:true});
       case 'repair-routes':return repairRoutes(ctx,params.panelId);
       case 'batch':return operation(ctx,'inbound.create',params,true);
       default:{

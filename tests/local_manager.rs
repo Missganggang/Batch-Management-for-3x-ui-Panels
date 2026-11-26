@@ -48,6 +48,18 @@ fn start_manager(dir: &std::path::Path) -> Result<(Service, String)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() -> Result<()> {
+    let fixture_dir = tempfile::tempdir()?;
+    let fixture_path = fixture_dir.path().join("panel.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&fixture_path)
+        .create_if_missing(true);
+    let fixture = sqlx::SqlitePool::connect_with(options).await?;
+    sqlx::raw_sql("CREATE TABLE settings(key TEXT, value TEXT); INSERT INTO settings VALUES ('marker', 'backup fixture');")
+        .execute(&fixture)
+        .await?;
+    fixture.close().await;
+    let database = std::fs::read(fixture_path)?;
+    let served_database = database.clone();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let upstream = Router::new()
         .route(
@@ -60,6 +72,13 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
         .route(
             "/base/panel/api/clients/list",
             get(|| async { Json(json!({"success":true,"obj":[]})) }),
+        )
+        .route(
+            "/base/panel/api/clients/onlines",
+            post(|h: HeaderMap| async move {
+                assert_eq!(h["authorization"], "Bearer integration-test");
+                Json(json!({"success":true,"obj":["fixture-online"]}))
+            }),
         )
         .route("/base/panel/api/xray/",post(||async {Json(json!({"success":true,"obj":{"xraySetting":{"outbounds":[],"routing":{"rules":[]}}}}))}))
         .route(
@@ -79,7 +98,7 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
         )
         .route(
             "/base/panel/api/server/getDb",
-            get(|| async { b"SQLite format 3\0test fixture".as_slice() }),
+            get(move || async move { served_database }),
         )
         .with_state(seen.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -122,6 +141,14 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
         .await?;
     assert_eq!(empty_links["clients"], json!([]));
     assert_eq!(empty_links["links"], json!([]));
+    let online: Value = http
+        .get(format!("{base}/api/panels/{id}/online-clients"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(online["emails"], json!(["fixture-online"]));
     assert!(!result.to_string().contains("integration-test"));
     assert_eq!(
         result["sync"]["inbounds"],
@@ -206,7 +233,7 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
     archive
         .by_name(manifest["files"][0]["file"].as_str().unwrap())?
         .read_to_end(&mut bytes)?;
-    assert_eq!(bytes, b"SQLite format 3\0test fixture");
+    assert_eq!(bytes, database);
     let history: Value = http
         .get(format!("{base}/api/history"))
         .send()
@@ -225,10 +252,40 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
         raw.headers()["content-disposition"],
         "attachment; filename=\"127.0.0.1-2026-11-27.db\""
     );
+    assert_eq!(raw.bytes().await?.as_ref(), database);
+    let summary = http
+        .post(format!("{base}/api/backup"))
+        .json(&json!({"panelIds":[id],"date":"2026-11-27","mode":"all"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(summary.headers()["content-type"], "application/zip");
     assert_eq!(
-        raw.bytes().await?.as_ref(),
-        b"SQLite format 3\0test fixture"
+        summary.headers()["content-disposition"],
+        "attachment; filename=\"summary-2026-11-27.zip\"; filename*=UTF-8''%E6%B1%87%E6%80%BB2026-11-27.zip"
     );
+    let mut summary = zip::ZipArchive::new(Cursor::new(summary.bytes().await?))?;
+    let summary_manifest: Value = serde_json::from_reader(summary.by_name("manifest.json")?)?;
+    assert_eq!(
+        summary_manifest["files"][0]["file"],
+        "127.0.0.1-2026-11-27.db"
+    );
+    let restored_path = fixture_dir.path().join("restored.sqlite");
+    std::io::copy(
+        &mut summary.by_name("127.0.0.1-2026-11-27.db")?,
+        &mut std::fs::File::create(&restored_path)?,
+    )?;
+    let restored = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(restored_path)
+            .read_only(true),
+    )
+    .await?;
+    let marker: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'marker'")
+        .fetch_one(&restored)
+        .await?;
+    assert_eq!(marker, "backup fixture");
+    restored.close().await;
     let alias = Router::new()
         .route(
             "/panel/api/inbounds/list",

@@ -320,6 +320,9 @@ async fn resource(
     let body = match resource.as_str() {
         "inbounds" => json!({"inbounds":api.inbounds().await.map_err(ApiError::upstream)?}),
         "clients" => json!({"clients":api.clients().await.map_err(ApiError::upstream)?}),
+        "online-clients" => {
+            json!({"emails":api.online_clients().await.map_err(ApiError::upstream)?})
+        }
         "config" => json!({"config":api.config().await.map_err(ApiError::upstream)?}),
         _ => return Err(ApiError(StatusCode::NOT_FOUND, "资源不存在".into())),
     };

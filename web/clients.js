@@ -50,6 +50,7 @@
       <div data-warnings class="wf-banners" role="status"></div><div data-pending></div>
       <section class="wf-surface"><div class="wf-subhead"><div class="wf-row"><h2>客户端列表</h2><span class="wf-count" data-count></span></div>
       <div class="wf-actions wf-client-bulk"><div class="wf-client-filters" role="group" aria-label="快捷筛选">
+      <button type="button" class="wf-button" data-online-filter aria-pressed="false" title="只看当前在线的客户端">${icon('radio',15)}在线</button>
       <button type="button" class="wf-button" data-disabled-filter aria-pressed="false" title="只看已停用的客户端">${icon('filter',15)}停用</button>
       <button type="button" class="wf-button" data-expiring-filter aria-pressed="false" title="只看未来 72 小时内到期的客户端">${icon('calendar-clock',15)}三天内到期</button></div>
       <button class="wf-button" data-copy-selected disabled>${icon('copy',15)}复制选中链接</button>
@@ -59,12 +60,15 @@
       <button class="wf-button" data-reset-selected disabled>${icon('rotate-ccw',15)}重置已用流量</button>
       <button class="wf-button wf-danger-link" data-delete-selected disabled>删除选中</button></div></div>
       <div class="wf-toolbar"><label class="wf-search">${icon('search',15)}<input type="search" placeholder="搜索客户端、入站或备注" aria-label="搜索客户端、入站或备注"></label>
-      <select data-filter class="wf-select" aria-label="筛选面板"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div>
+      <label class="wf-client-panel-filter">选择面板<select data-filter class="wf-select"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label></div>
+      <div data-online-warnings class="wf-online-warnings" role="status"></div>
       <div class="wf-hidden-selection" data-hidden-selection hidden><span></span><button type="button" class="wf-link">清除筛选外的勾选</button></div>
       <div data-list class="wf-table-wrap"><div class="wf-loading">正在读取客户端…</div></div><div data-pagination></div></section>`;
     host.replaceChildren(root);
     const rows = [], selected = new Map(), chosen = new Map(), pending = [], warnings = [];
     const savingStatus = new Set();
+    const onlineByPanel = new Map(), onlineErrors = new Map();
+    const onlineFilter = root.querySelector('[data-online-filter]');
     let page = 0;
     const disabledFilter = root.querySelector('[data-disabled-filter]');
     const expiringFilter = root.querySelector('[data-expiring-filter]');
@@ -95,20 +99,30 @@
       const busy = savingStatus.has(targetKey(row.target));
       return `<button type="button" class="wf-client-switch" data-row-status role="switch" aria-label="启用客户端 ${esc(row.client.email)}" aria-checked="${enabled}" ${busy?'disabled aria-busy="true"':''}><span aria-hidden="true"></span>${busy?'保存中':enabled?'已启用':'已停用'}</button>`;
     }
-    function draw() {
+    const isOnline = row => onlineByPanel.get(row.panel.id)?.has(row.client.email);
+    function onlineBadge(row) {
+      const online = isOnline(row);
+      const state = online === undefined ? 'unknown' : online ? 'online' : 'offline';
+      return `<span class="wf-presence" data-presence="${state}">${online === undefined ? '未知' : online ? '在线' : '离线'}</span>`;
+    }
+    function draw(presenceOnly = false) {
       if (!root.isConnected) return;
       const query=root.querySelector('[type=search]').value.trim().toLowerCase(), panel=root.querySelector('[data-filter]').value;
       const disabledOnly = disabledFilter.getAttribute('aria-pressed') === 'true';
+      const onlineOnly = onlineFilter.getAttribute('aria-pressed') === 'true';
       const expiringOnly = expiringFilter.getAttribute('aria-pressed') === 'true';
       const now = Date.now();
       const filtered = rows.map((row,index)=>({row,index})).filter(({row}) => {
         if (panel && row.panel.id !== panel) return false;
+        if (onlineOnly && !isOnline(row)) return false;
         if (disabledOnly && row.client.enable !== false) return false;
         const expiry = Number(row.client.expiryTime);
         if (expiringOnly && !(expiry > now && expiry <= now + 3 * dayMs)) return false;
         return !query || [row.client.email,row.panel.name,noteOf(row.client),...row.bindings.map(label)]
           .some(s=>String(s).toLowerCase().includes(query));
       });
+      const pages=Math.max(1,Math.ceil(filtered.length/12));page=Math.min(page,pages-1);
+      const shown=filtered.slice(page*12,(page+1)*12);
       const visibleRows = new Set(filtered.map(({row}) => row));
       const hiddenEntries = [...selected].filter(([,row]) => !visibleRows.has(row));
       hiddenSelection.hidden = !hiddenEntries.length;
@@ -117,8 +131,14 @@
         for (const [key] of hiddenEntries) selected.delete(key);
         draw();
       };
-      const pages=Math.max(1,Math.ceil(filtered.length/12));page=Math.min(page,pages-1);
-      const shown=filtered.slice(page*12,(page+1)*12);
+      // Keep focused controls and the sharing selector mounted across background updates.
+      if (presenceOnly && root.querySelector('[data-count]').textContent === String(filtered.length)) {
+        const displayed = [...table.querySelectorAll('tr[data-row]')];
+        if (displayed.length === shown.length && displayed.every((tr,i) => Number(tr.dataset.row) === shown[i].index)) {
+          displayed.forEach((tr,i) => { tr.querySelector('[data-online-cell]').innerHTML = onlineBadge(shown[i].row); });
+          return;
+        }
+      }
       batch.disabled=!selected.size;
       root.querySelector('[data-copy-selected]').disabled=!selected.size;
       root.querySelector('[data-export-selected]').disabled=!selected.size;
@@ -128,16 +148,17 @@
       root.querySelector('[data-reset-selected]').disabled=!selected.size;
       batch.textContent=selected.size?`删除选中（${selected.size}）`:'删除选中';
       root.querySelector('[data-count]').textContent=String(filtered.length);
-      table.innerHTML=shown.length?`<table class="wf-table"><thead><tr><th><input aria-label="选择本页客户端" data-select-page type="checkbox"></th><th>客户端 / 所属面板</th><th>状态</th><th>关联入站</th><th>到期时间</th><th>已用 / 流量上限</th><th>分享</th><th>操作</th><th>备注</th></tr></thead><tbody>${shown.map(({row,index})=>{
+      table.innerHTML=shown.length?`<table class="wf-table"><thead><tr><th><input aria-label="选择本页客户端" data-select-page type="checkbox"></th><th>客户端 / 所属面板</th><th>状态</th><th>在线状态</th><th>关联入站</th><th>到期时间</th><th>已用 / 流量上限</th><th>分享</th><th>操作</th><th>备注</th></tr></thead><tbody>${shown.map(({row,index})=>{
         const {client,bindings}=row;
         return `<tr data-row="${index}"><td><input data-select-client type="checkbox" aria-label="选择 ${esc(client.email)}" ${selected.has(targetKey(row.target))?'checked':''}></td>
           <td><strong>${esc(client.email)}</strong><small class="wf-meta">${esc(row.panel.name)}</small></td>
           <td data-status-cell>${statusControl(row)}</td>
+          <td data-online-cell>${onlineBadge(row)}</td>
           <td class="wf-binding-list">${bindings.map(i=>`<span>${esc(label(i))} · #${esc(i.id)}</span>`).join('')||'未绑定'}</td>
           <td>${esc(day(client.expiryTime))}</td><td><div class="wf-traffic-cell"><span>${esc(usageText(client))} / ${esc(quotaText(client))}</span><div class="wf-panel-actions"><button class="wf-link" data-row-quota>改上限</button><button class="wf-link" data-row-reset>重置流量</button></div></div></td><td>${shareControls(row)}</td>
           <td><div class="wf-panel-actions"><button class="wf-link" data-row-extend>增加时间</button>${bindings.length?'<button class="wf-link" data-row-expiry>改期</button>':''}<button class="wf-link wf-danger-link" data-remove-client>删除</button></div></td>
           <td class="wf-client-note"><button class="wf-note-editor" data-row-note title="${esc(noteOf(client) || '添加备注')}" aria-label="修改 ${esc(client.email)} 的备注"><span>${esc(noteOf(client)) || '添加备注'}</span>${icon('pencil',14)}</button></td></tr>`;
-      }).join('')}</tbody></table>`:`<div class="wf-empty">${query||panel||disabledOnly||expiringOnly?'没有匹配的客户端':warnings.length?'暂无可显示的客户端，请查看读取结果':'暂无客户端'}</div>`;
+      }).join('')}</tbody></table>`:`<div class="wf-empty">${query||panel||onlineOnly||disabledOnly||expiringOnly?'没有匹配的客户端':warnings.length?'暂无可显示的客户端，请查看读取结果':'暂无客户端'}</div>`;
       const all=table.querySelector('[data-select-page]');
       if(all){
         const n=shown.filter(({row})=>selected.has(targetKey(row.target))).length;
@@ -480,7 +501,7 @@
     root.querySelector('[data-reset-selected]').onclick=()=>trafficDialog('reset-traffic',[...selected.values()]);
     root.querySelector('[type=search]').oninput=()=>{page=0;draw();};
     root.querySelector('[data-filter]').onchange=()=>{page=0;draw();};
-    for (const button of [disabledFilter, expiringFilter]) {
+    for (const button of [onlineFilter, disabledFilter, expiringFilter]) {
       button.onclick = () => {
         button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
         page = 0;
@@ -508,6 +529,49 @@
     if(cleanups.status==='fulfilled')pending.push(...asList(cleanups.value.pending));else warnings.push(cleanups.reason.message);
     root.querySelector('[data-warnings]').innerHTML=warnings.map(w=>`<p class="wf-alert">${esc(w)}</p>`).join('');
     drawPending();draw();
+    const panelIds = new Set(rows.map(row => row.panel.id));
+    const tracked = panels.filter(panel => panelIds.has(panel.id));
+    if (!tracked.length) return;
+    const controller = new AbortController();
+    const {signal} = controller;
+    let timer, polling = false;
+    const observer = new MutationObserver(() => {
+      if (!root.isConnected) {
+        clearTimeout(timer);
+        controller.abort();
+        observer.disconnect();
+      }
+    });
+    observer.observe(host,{childList:true});
+    async function refreshOnline() {
+      clearTimeout(timer);
+      if (polling || signal.aborted || document.hidden) return;
+      polling = true;
+      try {
+        for (let offset=0; offset<tracked.length && !signal.aborted && !document.hidden; offset+=6) {
+          await Promise.all(tracked.slice(offset,offset+6).map(async panel => {
+            try {
+              const {emails} = await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/online-clients`,{signal,cache:'no-store'});
+              if (!Array.isArray(emails) || !emails.every(email => typeof email === 'string')) throw new Error('在线列表格式无效');
+              onlineByPanel.set(panel.id,new Set(emails));
+              onlineErrors.delete(panel.id);
+            } catch (err) {
+              if (signal.aborted) return;
+              onlineByPanel.delete(panel.id);
+              onlineErrors.set(panel.id,`${panel.name} · 在线状态未知（${err.message}）`);
+            }
+            if (!root.isConnected) return;
+            root.querySelector('[data-online-warnings]').textContent = [...onlineErrors.values()].join('；');
+            draw(true);
+          }));
+        }
+      } finally {
+        polling = false;
+        if (!signal.aborted && !document.hidden) timer = setTimeout(refreshOnline,30000);
+      }
+    }
+    document.addEventListener('visibilitychange',refreshOnline,{signal});
+    void refreshOnline();
   }
   window.Clients={render};
 })();

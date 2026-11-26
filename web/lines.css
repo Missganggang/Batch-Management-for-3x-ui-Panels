@@ -46,7 +46,7 @@
 .ln-form-error:not(:empty){margin-top:10px}
 .ln-alerts p{display:flex;align-items:center;gap:8px;background:#fff4e7;border:1px solid #f0ddc2;border-radius:6px;padding:8px 12px}
 .ln-list{margin-top:19px}
-.ln-list-head{justify-content:space-between;gap:10px;padding:18px 22px;border-bottom:1px solid #e8e9f1}
+.ln-list-head{flex-wrap:wrap;justify-content:space-between;gap:10px;padding:18px 22px;border-bottom:1px solid #e8e9f1}
 .ln-list-head>div{gap:8px}
 .ln-list-head b{font:600 11px/17px "Segoe UI",sans-serif;padding:0 6px;color:#75639c;background:#f2effa;border:1px solid #e8e3f3;border-radius:4px}
 .ln-search{display:flex;align-items:center;gap:7px;border:1px solid #e2e2eb;border-radius:6px;padding:6px 9px;color:#969aac}
@@ -137,14 +137,15 @@
 .ln-quota-options button{flex:1;white-space:nowrap;border:0;border-radius:4px;background:transparent;color:#74798a;cursor:pointer;font-family:inherit;font-size:12px;line-height:16px}
 .ln-quota-options button:hover,.ln-months label:hover span{background:#efeaf9}
 .ln-quota-options button[aria-pressed=true]{color:#6449bf;background:#e9e3fc;box-shadow:inset 0 0 0 1px #d7cef4;font-weight:650}
-.ln-list-tools{display:flex;align-items:center;gap:12px}
+.ln-list-tools{display:flex;flex-wrap:wrap;align-items:center;gap:12px;max-width:100%}
+.ln-list-panel{min-width:96px;max-width:165px;min-height:30px;padding:3px 8px;border:1px solid #e2e2eb;border-radius:6px;background:#fff;color:#505367;font:inherit;font-size:12px;text-overflow:ellipsis}
 .ln-manage-traffic{color:#6f51c4;font-size:12px;text-decoration:none;white-space:nowrap}
 .ln-manage-traffic:hover{text-decoration:underline}
 .ln-quota-total{color:#787d90;font-size:11px;font-weight:500;white-space:nowrap}
 @media(max-width:700px){.ln-limits{grid-template-columns:minmax(0,1fr);gap:13px}}
-@media(max-width:390px){.ln-list-head{flex-wrap:wrap}}
 .ln-create-actions,.ln-batch-footer{display:flex;align-items:center;gap:7px;margin-left:auto}
 .ln-create-actions .nx-button{min-height:39px;white-space:nowrap}
+.ln-create-actions .nx-button:disabled,.ln-batch-footer .nx-button:disabled{cursor:not-allowed;background:#f1f2f6;border-color:#e1e2eb;color:#777b8c;box-shadow:none;opacity:1}
 .ln-batch-dialog{width:min(720px,calc(100vw - 28px))}
 .ln-paste-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.38fr);gap:14px}
 .ln-paste-columns>label{min-width:0}

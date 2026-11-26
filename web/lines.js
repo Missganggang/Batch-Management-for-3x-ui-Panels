@@ -178,7 +178,7 @@
   }
   function createPage(host,ctx) {
     const root=document.createElement('div');root.className='ln-page';
-    root.innerHTML='<div class="ln-heading"><div><h1>线路管理</h1><p><span class="ln-protocol">'+icon('shield-check',13)+'VLESS</span><span>TCP</span><i></i><span>Reality</span></p></div><button class="nx-button" data-refresh>'+icon('refresh-cw',14)+'刷新</button></div><section class="ln-compose"><div class="ln-compose-heading"><div class="ln-compose-icon">'+icon('route',21)+'</div><div><h2>新建线路</h2><p>同一个名称将用于入站、客户端和 SOCKS5 出站。</p></div></div><form class="ln-form"><div class="ln-fields"><label>线路名称<input name="name" required maxlength="80" autocomplete="off" placeholder="例如 中国台湾210.65.177.177"></label><label>SOCKS5 出口<span class="ln-secret"><input type="text" name="socks5" required autocomplete="off" spellcheck="false" placeholder="socks5://user:pass@host:port"><button type="button" data-visibility aria-label="隐藏 SOCKS5">'+icon('eye-off',16)+'</button></span></label></div>'+createLimits()+'<div class="ln-form-bottom"><label class="ln-panel-select"><span>目标面板</span><select name="panelId" aria-label="目标面板" disabled><option>正在读取面板…</option></select></label><div class="ln-create-actions"><button type="button" class="nx-button ln-batch-open" data-batch disabled>'+icon('layers',15)+'批量创建线路</button><button class="nx-button nx-primary ln-submit" type="submit" disabled>'+icon('plus',16)+'创建线路</button></div></div><div class="ln-panel-support"><button type="button" data-add>'+icon('server',14)+'接入面板</button><button type="button" data-host hidden>'+icon('settings-2',14)+'分享地址</button></div><div class="ln-form-error" role="alert"></div></form></section><div class="ln-alerts" aria-live="polite"></div><section class="ln-list"><div class="ln-list-head"><div><h2>我的线路</h2><b data-total>0</b></div><div class="ln-list-tools"><a class="ln-manage-traffic" href="#clients">管理流量</a><label class="ln-search">'+icon('search',15)+'<input type="search" placeholder="搜索线路" aria-label="搜索线路"></label></div></div><div class="ln-table-wrap"><table><thead><tr><th>线路名称</th><th>在线状态</th><th>已用流量 / 上限</th><th>到期时间</th><th>操作</th></tr></thead><tbody></tbody></table></div><div class="ln-empty" role="status">正在读取线路…</div>' +
+    root.innerHTML='<div class="ln-heading"><div><h1>线路管理</h1><p><span class="ln-protocol">'+icon('shield-check',13)+'VLESS</span><span>TCP</span><i></i><span>Reality</span></p></div><button class="nx-button" data-refresh>'+icon('refresh-cw',14)+'刷新</button></div><section class="ln-compose"><div class="ln-compose-heading"><div class="ln-compose-icon">'+icon('route',21)+'</div><div><h2>新建线路</h2><p>同一个名称将用于入站、客户端和 SOCKS5 出站。</p></div></div><form class="ln-form"><div class="ln-fields"><label>线路名称<input name="name" required maxlength="80" autocomplete="off" placeholder="例如 中国台湾210.65.177.177"></label><label>SOCKS5 出口<span class="ln-secret"><input type="text" name="socks5" required autocomplete="off" spellcheck="false" placeholder="socks5://user:pass@host:port"><button type="button" data-visibility aria-label="隐藏 SOCKS5">'+icon('eye-off',16)+'</button></span></label></div>'+createLimits()+'<div class="ln-form-bottom"><label class="ln-panel-select"><span>目标面板</span><select name="panelId" aria-label="目标面板" required disabled><option value="">正在读取面板…</option></select></label><div class="ln-create-actions"><button type="button" class="nx-button ln-batch-open" data-batch disabled>'+icon('layers',15)+'批量创建线路</button><button class="nx-button nx-primary ln-submit" type="submit" disabled>'+icon('plus',16)+'创建线路</button></div></div><div class="ln-panel-support"><button type="button" data-add>'+icon('server',14)+'接入面板</button><button type="button" data-host hidden>'+icon('settings-2',14)+'分享地址</button></div><div class="ln-form-error" role="alert"></div></form></section><div class="ln-alerts" aria-live="polite"></div><section class="ln-list"><div class="ln-list-head"><div><h2>我的线路</h2><b data-total>0</b></div><div class="ln-list-tools"><a class="ln-manage-traffic" href="#clients">管理流量</a><select class="ln-list-panel" data-line-panel-filter aria-label="按面板筛选线路" disabled><option value="">全部面板</option></select><label class="ln-search">'+icon('search',15)+'<input type="search" placeholder="搜索线路" aria-label="搜索线路"></label></div></div><div class="ln-table-wrap"><table><thead><tr><th>线路名称</th><th>在线状态</th><th>已用流量 / 上限</th><th>到期时间</th><th>操作</th></tr></thead><tbody></tbody></table></div><div class="ln-empty" role="status">正在读取线路…</div>' +
       '<nav class="ln-pager" aria-label="我的线路分页" hidden><span data-line-range></span><div>' +
       '<button type="button" class="nx-button" data-line-prev aria-label="上一页">'+icon('chevron-left',14)+'</button>' +
       '<span data-line-page aria-live="polite"></span><button type="button" class="nx-button" data-line-next aria-label="下一页">'+icon('chevron-right',14)+'</button></div></nav></section>';
@@ -191,7 +191,9 @@
     root.querySelector('[data-add]').onclick=addPanel;
     root.querySelector('[data-host]').onclick=()=>editHost(model);
     root.querySelector('[data-refresh]').onclick=()=>load(model,true);
-    root.querySelector('[type=search]').oninput=()=>{model.listPage=1;drawLines(model);};
+    const filterList=()=>{model.listPage=1;drawLines(model);};
+    root.querySelector('[data-line-panel-filter]').onchange=filterList;
+    root.querySelector('[type=search]').oninput=filterList;
     root.querySelector('[data-line-prev]').onclick=()=>{model.listPage--;drawLines(model);};
     root.querySelector('[data-line-next]').onclick=()=>{model.listPage++;drawLines(model);};
     form.querySelector('[data-visibility]').onclick=e=>{
@@ -200,10 +202,8 @@
       e.currentTarget.innerHTML=icon(show?'eye-off':'eye',16);e.currentTarget.setAttribute('aria-label',show?'隐藏 SOCKS5':'显示 SOCKS5');
     };
     panelChoice.onchange=()=>{
-      form.querySelector('[data-host]').hidden=!panelChoice.value;
+      updateCreationControls(model);
       form.querySelector('[role=alert]').textContent='';
-      model.listPage=1;
-      drawLines(model);
     };
     form.onsubmit=async e=>{
       e.preventDefault();if(model.creating)return;
@@ -219,17 +219,17 @@
       }
       try { Object.assign(body, readLimits()); }
       catch(error) { output.textContent=error.message;return; }
-      output.textContent='';model.creating=true;btn.disabled=true;btn.textContent='正在创建…';form.inert=true;
+      output.textContent='';model.creating=true;updateCreationControls(model);btn.textContent='正在创建…';form.inert=true;
       try{
         const {line}=await ctx.api('/api/lines',{method:'POST',body});
-        model.listPage=1;form.elements.socks5.value='';form.elements.name.value='';
+        form.elements.socks5.value='';form.elements.name.value='';
         form.querySelectorAll('input[name=months]').forEach(choice=>choice.checked=false);
         form.elements.exactExpiry.value='';form.elements.quotaGB.value='';
         form.elements.quotaGB.dispatchEvent(new Event('input'));
         if(line?.link&&root.isConnected)share(line,ctx);
         else ctx.toast(line?.status==='failed'?'线路创建失败，请查看列表中的原因':'线路已提交');
       }catch(error){output.textContent=error.message;}
-      finally{model.creating=false;form.inert=false;btn.innerHTML=icon('plus',16)+'创建线路';btn.disabled=!model.panels.length;await load(model);}
+      finally{model.creating=false;form.inert=false;btn.innerHTML=icon('plus',16)+'创建线路';updateCreationControls(model);await load(model);}
     };
     root.querySelector('tbody').onclick=e=>{
       const b=e.target.closest('[data-line]');if(!b)return;
@@ -246,23 +246,33 @@
     };
     return model;
   }
+  function updateCreationControls(model) {
+    const form=model.root.querySelector('.ln-form');
+    const target=form.elements.panelId.value;
+    form.querySelector('[data-host]').hidden=!target;
+    for(const button of form.querySelectorAll('.ln-create-actions button')){
+      button.disabled=model.creating||!target;
+      button.title=target?'':'请先选择目标面板';
+    }
+  }
   function updatePanels(model) {
-    const form=model.root.querySelector('form'),select=form.elements.panelId;
-    const previous=select.disabled?'':select.value;
-    select.replaceChildren(new Option(model.panels.length?'全部面板':'请先接入面板',''));
-    model.panels.forEach(p=>select.add(new Option(p.name,p.id)));
-    if(model.panels.some(p=>String(p.id)===previous))select.value=previous;
-    if(previous!==select.value)model.listPage=1;
-    select.disabled=!model.panels.length;
-    form.querySelector('[data-host]').hidden=!select.value;
+    const form=model.root.querySelector('.ln-form');
+    const filter=model.root.querySelector('[data-line-panel-filter]');
+    const previousFilter=filter.value;
+    for(const [select,placeholder] of [[form.elements.panelId,'请选择目标面板'],[filter,'全部面板']]){
+      const previous=select.value;
+      select.replaceChildren(new Option(placeholder,''));
+      for(const panel of model.panels)select.add(new Option(panel.name,panel.id));
+      if(model.panels.some(panel=>String(panel.id)===previous))select.value=previous;
+      select.disabled=!model.panels.length;
+    }
+    if(previousFilter!==filter.value)model.listPage=1;
     form.querySelector('.ln-panel-support').classList.toggle('ln-needs-panel',!model.panels.length);
-    form.querySelector('[type=submit]').disabled=model.creating||!model.panels.length;
-    form.querySelector('[data-batch]').disabled=model.creating||!model.panels.length;
+    updateCreationControls(model);
   }
   function drawLines(model) {
     const {root,ctx,lines}=model,esc=ctx.esc;
-    const select=root.querySelector('[name=panelId]');
-    const panelId=select.disabled?'':select.value;
+    const panelId=root.querySelector('[data-line-panel-filter]').value;
     const term=root.querySelector('[type=search]').value.trim().toLowerCase();
     const panelLines=panelId?lines.filter(l=>String(l.panelId)===panelId):lines;
     const list=panelLines.filter(l=>(l.name+' '+l.panelName).toLowerCase().includes(term));
@@ -354,6 +364,7 @@
   }
   function batchCreate(model) {
     const {ctx,root}=model,active=root.querySelector('[name=panelId]').value;
+    if(model.creating||!model.panels.some(panel=>String(panel.id)===active))return;
     const d=dialog('批量创建线路',
       '<form class="ln-small-form ln-batch-form">'+
         '<div class="ln-paste-columns">'+
@@ -427,9 +438,6 @@
         panel.disabled=true;
         if(!failed.length)form.querySelectorAll('.ln-limit-field').forEach(field=>field.disabled=true);
         clients.hidden=!success;submitted=true;
-        const mainPanel=root.querySelector('[name=panelId]');
-        mainPanel.value=panel.value;
-        mainPanel.dispatchEvent(new Event('change'));
         if(failed.length){
           form.querySelector('[data-paste-help]').textContent='已保留失败的线路和出口。修改后可再次提交。';
         }else{

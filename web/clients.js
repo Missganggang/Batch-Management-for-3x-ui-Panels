@@ -9,7 +9,7 @@
     ['panel','所属面板'], ['inbound','关联入站'], ['note','备注'], ['host','服务器地址'], ['port','端口'], ['status','客户端状态']
   ];
   const dayMs = 86400000;
-  const day = time => Number(time) > 0 ? new Date(Number(time)).toLocaleDateString('zh-CN')
+  const day = time => Number(time) > 0 ? new Date(Number(time)).toLocaleString('zh-CN',{hour12:false})
     : Number(time) < 0 ? `首次使用后 ${Math.abs(time) / 86400000} 天` : '永久有效';
 
   function exportExpiry(time) {
@@ -78,6 +78,8 @@
       <div class="wf-actions wf-client-bulk"><button class="wf-button" data-copy-selected disabled>${icon('copy',15)}复制选中链接</button>
       <button class="wf-button" data-export-selected disabled>${icon('download',15)}导出 Excel</button><button class="wf-button" data-notes-selected disabled>${icon('pencil',15)}修改备注</button>
       <button class="wf-button" data-extend-selected disabled>${icon('calendar-days',15)}增加时间</button>
+      <button class="wf-button" data-quota-selected disabled>${icon('pencil',15)}修改流量上限</button>
+      <button class="wf-button" data-reset-selected disabled>${icon('rotate-ccw',15)}重置已用流量</button>
       <button class="wf-button wf-danger-link" data-delete-selected disabled>删除选中</button></div></div>
       <div class="wf-toolbar"><label class="wf-search">${icon('search',15)}<input type="search" placeholder="搜索客户端、入站或备注" aria-label="搜索客户端、入站或备注"></label>
       <select data-filter class="wf-select" aria-label="筛选面板"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div>
@@ -88,6 +90,11 @@
     const table = root.querySelector('[data-list]'), batch = root.querySelector('[data-delete-selected]');
     const label = i => i.remark || i.tag || `入站 #${i.id}`;
     const panelName = t => ctx.state.panels.find(p=>p.id===t.panelId)?.name || t.panelId;
+    const quotaText = client => client.totalGB == null ? '—' : client.totalGB === 0 ? '不限' : ctx.bytes(client.totalGB,2).join(' ');
+    function usageText(client) {
+      const {up,down} = client.traffic || {};
+      return up == null || down == null ? '—' : ctx.bytes(Number(up) + Number(down),2).join(' ');
+    }
     const selectedLink = row => row.options.find(o=>String(o.inboundId)===chosen.get(targetKey(row.target))) || row.options[0];
     root.querySelector('[data-refresh-clients]').onclick = () => ctx.refresh();
     root.querySelector('[data-create]').onclick = () => wf.open('client.create',ctx);
@@ -112,14 +119,16 @@
       root.querySelector('[data-export-selected]').disabled=!selected.size;
       root.querySelector('[data-notes-selected]').disabled=!selected.size;
       root.querySelector('[data-extend-selected]').disabled=!selected.size;
+      root.querySelector('[data-quota-selected]').disabled=!selected.size;
+      root.querySelector('[data-reset-selected]').disabled=!selected.size;
       batch.textContent=selected.size?`删除选中（${selected.size}）`:'删除选中';
       root.querySelector('[data-count]').textContent=String(filtered.length);
-      table.innerHTML=shown.length?`<table class="wf-table"><thead><tr><th><input aria-label="选择本页客户端" data-select-page type="checkbox"></th><th>客户端 / 所属面板</th><th>关联入站</th><th>到期时间</th><th>分享</th><th>操作</th><th>备注</th></tr></thead><tbody>${shown.map(({row,index})=>{
+      table.innerHTML=shown.length?`<table class="wf-table"><thead><tr><th><input aria-label="选择本页客户端" data-select-page type="checkbox"></th><th>客户端 / 所属面板</th><th>关联入站</th><th>到期时间</th><th>已用 / 流量上限</th><th>分享</th><th>操作</th><th>备注</th></tr></thead><tbody>${shown.map(({row,index})=>{
         const {client,bindings}=row;
         return `<tr data-row="${index}"><td><input data-select-client type="checkbox" aria-label="选择 ${esc(client.email)}" ${selected.has(targetKey(row.target))?'checked':''}></td>
           <td><strong>${esc(client.email)}</strong><small class="wf-meta">${esc(row.panel.name)} · ${client.enable===false?'停用':'启用'}</small></td>
           <td class="wf-binding-list">${bindings.map(i=>`<span>${esc(label(i))} · #${esc(i.id)}</span>`).join('')||'未绑定'}</td>
-          <td>${esc(day(client.expiryTime))}</td><td>${shareControls(row)}</td>
+          <td>${esc(day(client.expiryTime))}</td><td><div class="wf-traffic-cell"><span>${esc(usageText(client))} / ${esc(quotaText(client))}</span><div class="wf-panel-actions"><button class="wf-link" data-row-quota>改上限</button><button class="wf-link" data-row-reset>重置流量</button></div></div></td><td>${shareControls(row)}</td>
           <td><div class="wf-panel-actions"><button class="wf-link" data-row-extend>增加时间</button>${bindings.length?'<button class="wf-link" data-row-expiry>改期</button>':''}<button class="wf-link wf-danger-link" data-remove-client>删除</button></div></td>
           <td class="wf-client-note"><button class="wf-note-editor" data-row-note title="${esc(noteOf(client) || '添加备注')}" aria-label="修改 ${esc(client.email)} 的备注"><span>${esc(noteOf(client)) || '添加备注'}</span>${icon('pencil',14)}</button></td></tr>`;
       }).join('')}</tbody></table>`:`<div class="wf-empty">${query||panel?'没有匹配的客户端':warnings.length?'暂无可显示的客户端，请查看读取结果':'暂无客户端'}</div>`;
@@ -227,6 +236,15 @@
           .find(c => c.id === target.clientId && c.email === target.email);
         const result = {...target, name:panel.name, ok:false};
         if (!client) return {...result, message:'客户端已移除'};
+        if (action === 'quota') {
+          client.totalGB = change.quotaBytes;
+          return {...result, ok:true, quotaBytes:change.quotaBytes, message:'已更新客户端流量上限'};
+        }
+        if (action === 'reset-traffic') {
+          client.traffic = {...client.traffic, up:0, down:0};
+          client.enable = true;
+          return {...result, ok:true, message:'已重置当前周期流量'};
+        }
         if (action === 'notes') {
           if (noteOf(client) !== target.note) return {...result, conflict:true, message:'备注已变化，请重新读取'};
           client.comment = change.note;
@@ -239,6 +257,40 @@
           return {...result, message:'到期时间超出可表示的日期范围'};
         client.expiryTime = expiryTime;
         return {...result, ok:true, expiryTime:client.expiryTime, message:`新的有效期为 ${day(client.expiryTime)}`};
+      });
+    }
+    function trafficDialog(action, entries) {
+      if (!entries.length) return;
+      if (entries.length > 512) return ctx.toast('每次最多可处理 512 个客户端','error');
+      const reset = action === 'reset-traffic';
+      const title = reset ? '重置已用流量' : '修改流量上限';
+      const scope = entries.map(({panel,client}) => `<li><strong>${esc(client.email)}</strong><small>${esc(panel.name)} · 已用 ${esc(usageText(client))} / 上限 ${esc(quotaText(client))}</small></li>`).join('');
+      const list = `<ul class="wf-delete-targets wf-edit-targets">${scope}</ul>`;
+      const summary = entries.length === 1 ? list : `<details class="wf-client-scope"><summary>已选 ${entries.length} 个客户端 · 查看名单</summary>${list}</details>`;
+      const control = reset
+        ? '<p>将清零所选客户端在所有绑定入站的本周期上传、下载用量。3x-ui 会尝试重新启用已停用的客户端。</p>'
+        : window.Lines.quotaField({required:true});
+      const dialog = wf.modal(ctx,title,reset ? 'rotate-ccw' : 'pencil',
+        `<form id="wf-form" class="wf-form">${summary}${control}<div class="wf-inline-error" role="alert"></div></form>`,
+        wf.submitFooter(reset ? '确认清零' : '保存流量上限'));
+      const readQuota = reset ? null : window.Lines.bindQuota(dialog.querySelector('form'));
+      if (reset) dialog.querySelector('[data-wf-submit]').classList.add('wf-danger');
+      wf.bindForm(dialog,async () => {
+        const change = reset ? {} : {quotaBytes:readQuota()};
+        const targets = entries.map(({target,client}) => reset ? target : {...target,quotaBytes:client.totalGB});
+        let results;
+        try {
+          results = await editClients(action,targets,change);
+        } catch (err) {
+          // A transport failure can occur after 3x-ui applied a reset.
+          dialog.close();
+          ctx.toast(`${err.message}。请核对刷新后的流量再操作。`,'error');
+          await ctx.refresh();
+          return;
+        }
+        dialog.close();
+        showResults(`${title}结果`,results);
+        await ctx.refresh();
       });
     }
     function editDialog(action, entries, draft = {}, originalTargets = new Map()) {
@@ -395,6 +447,8 @@
       const row=rows[Number(tr.dataset.row)], item=selectedLink(row);
       if(btn.matches('[data-row-note]'))return editDialog('notes',[row]);
       if(btn.matches('[data-row-extend]'))return editDialog('extend',[row]);
+      if(btn.matches('[data-row-quota]'))return trafficDialog('quota',[row]);
+      if(btn.matches('[data-row-reset]'))return trafficDialog('reset-traffic',[row]);
       if(btn.matches('[data-remove-client]'))return confirmDelete([row]);
       if(btn.matches('[data-row-expiry]'))return wf.open('client.expiry',ctx,{panelId:row.panel.id,client:row.client,inbound:row.bindings[0]});
       if(!item)return;
@@ -417,6 +471,8 @@
     root.querySelector('[data-export-selected]').onclick=()=>exportNodes([...selected.values()]);
     root.querySelector('[data-notes-selected]').onclick=()=>editDialog('notes',[...selected.values()]);
     root.querySelector('[data-extend-selected]').onclick=()=>editDialog('extend',[...selected.values()]);
+    root.querySelector('[data-quota-selected]').onclick=()=>trafficDialog('quota',[...selected.values()]);
+    root.querySelector('[data-reset-selected]').onclick=()=>trafficDialog('reset-traffic',[...selected.values()]);
     root.querySelector('[type=search]').oninput=()=>{page=0;draw();};
     root.querySelector('[data-filter]').onchange=()=>{page=0;draw();};
     const pendingRequest=ctx.state.demo?Promise.resolve({pending:[]}):ctx.api('/api/clients/deletions');

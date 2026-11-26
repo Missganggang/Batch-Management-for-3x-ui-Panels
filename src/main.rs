@@ -119,6 +119,8 @@ async fn main() -> Result<()> {
         .route("/api/clients/export-xlsx", post(clients::export))
         .route("/api/clients/extend", post(clients::extend))
         .route("/api/clients/notes", post(clients::notes))
+        .route("/api/clients/quota", post(clients::quota))
+        .route("/api/clients/reset-traffic", post(clients::reset_traffic))
         .route("/api/clients/deletions", get(clients::pending))
         .route("/api/panels/:id/public-host", post(lines::change_host))
         .route("/api/lines", get(lines::list).post(lines::create))

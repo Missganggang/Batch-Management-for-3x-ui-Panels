@@ -99,6 +99,20 @@ pub async fn notes(State(app): State<Shared>, Json(input): Json<Note>) -> ApiRes
     execute(app, input.targets, Operation::Notes(input.note)).await
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quota {
+    targets: Vec<Target>,
+    quota_bytes: i64,
+}
+
+pub async fn quota(State(app): State<Shared>, Json(input): Json<Quota>) -> ApiResult<Json<Value>> {
+    if input.quota_bytes < 0 {
+        return Err(ApiError::bad("流量上限须为非负整数字节，0 表示不限"));
+    }
+    execute(app, input.targets, Operation::Quota(input.quota_bytes)).await
+}
+
 async fn record(api: &PanelApi, target: &Target) -> Result<(Value, i64)> {
     let mut details = api.client_details(&target.email).await?;
     let record = details["client"].take();
@@ -112,6 +126,60 @@ async fn record(api: &PanelApi, target: &Target) -> Result<(Value, i64)> {
         .as_i64()
         .context("面板未返回客户端到期时间")?;
     Ok((record, expiry))
+}
+
+pub(super) async fn quota_target(
+    db: &SqlitePool,
+    target: &Target,
+    api: &PanelApi,
+    bytes: i64,
+) -> Result<Value> {
+    let (mut client, expiry) = record(api, target).await?;
+    let current = client["totalGB"]
+        .as_i64()
+        .context("面板未返回客户端流量上限")?;
+    let mut message = "已设置客户端流量上限";
+    if current != bytes {
+        ensure!(
+            target
+                .quota_bytes
+                .is_none_or(|expected| expected == current),
+            Conflict("客户端流量上限已变化，请刷新列表后重试")
+        );
+        client["totalGB"] = json!(bytes);
+        let reply = api
+            .save_client_record(client, &target.email, expiry)
+            .await?;
+        let (saved, _) = record(api, target).await?;
+        ensure!(
+            saved["totalGB"].as_i64() == Some(bytes),
+            "面板回读的额度与所设值不符，请核对客户端的入站绑定及当前额度"
+        );
+        if reply["nodePending"] == true {
+            message = "已设置流量上限，等待节点同步";
+        }
+    }
+    sqlx::query(
+        "UPDATE lines SET quota_bytes=?,updated=? WHERE panel_id=? AND status='ready'
+         AND uuid=? AND client_email=? AND (client_record=? OR client_record IS NULL)",
+    )
+    .bind(bytes)
+    .bind(storage::now())
+    .bind(&target.panel_id)
+    .bind(&target.uuid)
+    .bind(&target.email)
+    .bind(target.client_id)
+    .execute(db)
+    .await?;
+    Ok(json!({"message":message,"quotaBytes":bytes}))
+}
+
+pub(super) async fn reset_target(target: &Target, api: &PanelApi) -> Result<Value> {
+    record(api, target).await?;
+    api.reset_client_traffic(&target.email)
+        .await
+        .context("请刷新列表核对当前流量后再决定是否重新清零")?;
+    Ok(json!({"message":"已重置客户端的已用流量"}))
 }
 
 pub(super) async fn note_target(target: &Target, api: &PanelApi, note: &str) -> Result<Value> {

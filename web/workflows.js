@@ -40,7 +40,8 @@
     }));
     for(let i=0;i<clientCount && inbounds.length;i++) {
       const dest=inbounds[i%inbounds.length];
-      dest.settings.clients.push({id:`demo-${i+1}`,email:`client-${String(i+1).padStart(3,'0')}`,enable:true,flow:'xtls-rprx-vision',expiryTime:i%4===1?Date.now()+14*86400000:0});
+      dest.settings.clients.push({id:`demo-${i+1}`,email:`client-${String(i+1).padStart(3,'0')}`,enable:true,flow:'xtls-rprx-vision',expiryTime:i%4===1?Date.now()+14*86400000:0,
+        totalGB:i%2 ? 100 * 1024**3 : 0, traffic:{up:(i+1)*1024**2, down:(i+1)*16*1024**2}});
     }
     const rules=[
       {type:'field',inboundTag:['api'],outboundTag:'api'},
@@ -497,13 +498,22 @@
     });
   }
   const headings={
-    panels:['面板名称','地区','连接状态','入站','客户端','操作'],
+    panels:['面板名称','面板入口','地区','连接状态','入站','客户端','操作'],
     backups:['面板名称','地区','连接状态','操作'],
     inbounds:['入站名称','所属面板','协议','到期时间','状态','操作'],
     outbounds:['出站标签','规则中的用户','入站标签匹配','所属面板','协议','操作'],
     routes:['优先级','用户','出站','入站标签','其他条件','所属面板','操作'],
     activity:['操作类型','执行时间','涉及面板','执行结果','操作']
   };
+  function panelAccess(ctx, panel) {
+    if (ctx.state.demo) return '<span class="wf-muted">演示面板</span>';
+    let url;
+    try { url = new URL(panel.url); } catch { return '—'; }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return '—';
+    const base = url.pathname.replace(/\/+$/, '').replace(/\/panel(?:\/api)?$/, '');
+    url.pathname = base + '/';
+    return `<a class="wf-link wf-panel-visit" href="${esc(url.href)}" target="_blank" rel="noopener noreferrer" aria-label="访问 ${esc(panel.name)} 的面板（新标签页）">访问面板${ctx.icon('external-link',14)}</a>`;
+  }
   async function fetchRows(ctx,page,onError) {
     const panels=ctx.state.panels;
     if(page==='panels'||page==='backups')return panels.map(panel=>({panel}));
@@ -527,7 +537,7 @@
   function rowCells(ctx,page,row,index) {
     const {panel:p,inbound:i,client:c,outbound:o,rule:r,event:h}=row;
     const online=()=>p.online===true?badge('在线','good'):p.online===false?badge('离线','fail'):badge('待同步','neutral');
-    if(page==='panels')return [entity(ctx,'server',p.name,p.url),esc(p.region||'—'),online(),esc(p.inbounds??'—'),esc(p.clients??'—'),'<div class="wf-panel-actions">'+refLink('panel-detail',index,'详情')+refLink('panel-sync',index,'同步')+refLink('panel-remove',index,'删除')+'</div>'];
+    if(page==='panels')return [entity(ctx,'server',p.name,p.url),panelAccess(ctx,p),esc(p.region||'—'),online(),esc(p.inbounds??'—'),esc(p.clients??'—'),'<div class="wf-panel-actions">'+refLink('panel-detail',index,'详情')+refLink('panel-sync',index,'同步')+refLink('panel-remove',index,'删除')+'</div>'];
     if(page==='backups')return [entity(ctx,'database',p.name,p.url),esc(p.region||'—'),online(),refLink('download-one',index,'下载备份')];
     if(page==='inbounds')return [entity(ctx,'log-in',i.remark||'未命名入站',`:${i.port} · #${i.id}`),esc(p.name),badge(String(i.protocol||'—').toUpperCase()),esc(date(i.expiryTime||0)),badge(i.enable===false?'停用':'启用',i.enable===false?'neutral':'good'),refLink('inbound.expiry',index,'修改有效期')];
     if(page==='outbounds')return [entity(ctx,'log-out',o.tag||'未命名出站'),esc(row.users.join('、')||'—'),esc(row.inboundTags.join('、')||'—'),esc(p.name),badge(o.protocol||'—'),refLink('outbound.upsert',index,'编辑')];

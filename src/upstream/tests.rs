@@ -70,10 +70,14 @@ async fn line_recovers_after_interrupted_template_save() {
         }))
         .with_state(state.clone());
     let api = panel(app).await;
-    let spec = json!({"name":"测试-甲","socks5":"127.0.0.1:1080:worker:s3cret","connectHost":"[::1]","expiryTime":30000});
+    let spec = json!({"name":"测试-甲","socks5":"127.0.0.1:1080:worker:s3cret","connectHost":"[::1]","expiryTime":30000,"quotaBytes":53_687_091_200_i64});
     let id = "40afc7d3-f6cd-46d1-800f-63e9a1b17434";
     assert!(!format!("{:#}", api.provision_line(&spec, id).await.unwrap_err()).contains("s3cret"));
     assert_eq!(state.lock().unwrap().ib["enable"], false);
+    state.lock().unwrap().ib["settings"]["clients"][0]["totalGB"] = json!(0);
+    assert!(api.provision_line(&spec, id).await.is_err());
+    assert_eq!(state.lock().unwrap().ib["enable"], false);
+    state.lock().unwrap().ib["settings"]["clients"][0]["totalGB"] = spec["quotaBytes"].clone();
     assert!(api
         .provision_line(&spec, "63d2518a-424a-4187-8371-c0ac0095eacd")
         .await
@@ -91,6 +95,12 @@ async fn line_recovers_after_interrupted_template_save() {
     assert_eq!(s.cfg["routing"]["rules"][4]["outboundTag"], "direct");
     assert_eq!(s.ib["expiryTime"], 0);
     assert_eq!(s.ib["settings"]["clients"][0]["expiryTime"], 30000);
+    assert_eq!(
+        s.ib["settings"]["clients"][0]["totalGB"],
+        53_687_091_200_i64
+    );
+    assert_eq!(line["quotaBytes"], 53_687_091_200_i64);
+    assert_eq!(line["expiryTime"], 30000);
     let outbound = &s.cfg["outbounds"][1];
     assert_eq!(outbound["tag"], "测试-甲");
     assert_eq!(

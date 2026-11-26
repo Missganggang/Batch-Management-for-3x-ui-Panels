@@ -90,6 +90,7 @@ struct Binding {
     name: String,
     link: String,
     expiry: i64,
+    quota: Option<i64>,
     inbound_expiry: i64,
     enabled: bool,
     shared: bool,
@@ -190,6 +191,7 @@ fn snapshot(inbounds: &[Value], clients: &[Value], host: &str) -> Result<Snapsho
                 expiry: client["expiryTime"]
                     .as_i64()
                     .context("客户端缺少到期时间")?,
+                quota: client["totalGB"].as_i64().filter(|v| *v >= 0),
                 inbound_expiry: ib["expiryTime"].as_i64().unwrap_or(0),
                 enabled: client["enable"].as_bool().unwrap_or(true)
                     && ib["enable"].as_bool().unwrap_or(true),
@@ -269,21 +271,21 @@ async fn save(db: &SqlitePool, panel_id: &str, snapshot: Snapshot) -> Result<Val
             }
             let row = &existing[i];
             let id: String = row.get("id");
-            let q=sqlx::query("UPDATE lines SET name=?1,uuid=?2,client_email=?3,inbound_name=?4,client_record=?5,expiry=?6,inbound_expiry=?7,enabled=?8,shared_client=?9,link=?10,updated=?11,
+            let q=sqlx::query("UPDATE lines SET name=?1,uuid=?2,client_email=?3,inbound_name=?4,client_record=?5,expiry=?6,inbound_expiry=?7,enabled=?8,shared_client=?9,link=?10,updated=?11,quota_bytes=?13,
                 renewal_target=CASE WHEN uuid=?2 AND client_email=?3 THEN renewal_target ELSE NULL END
-                WHERE id=?12 AND (name,uuid,client_email,inbound_name,client_record,expiry,inbound_expiry,enabled,shared_client,link) IS NOT (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")
+                WHERE id=?12 AND (name,uuid,client_email,inbound_name,client_record,expiry,inbound_expiry,enabled,shared_client,link,quota_bytes) IS NOT (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?13)")
                 .bind(b.name).bind(b.uuid).bind(b.email).bind(b.inbound_name).bind(b.client_id).bind(b.expiry).bind(b.inbound_expiry)
-                .bind(b.enabled).bind(b.shared).bind(b.link).bind(storage::now()).bind(id).execute(&mut *tx).await?;
+                .bind(b.enabled).bind(b.shared).bind(b.link).bind(storage::now()).bind(id).bind(b.quota).execute(&mut *tx).await?;
             if q.rows_affected() == 1 {
                 updated += 1;
             } else {
                 unchanged += 1;
             }
         } else {
-            sqlx::query("INSERT INTO lines(id,panel_id,name,uuid,status,expiry,inbound_id,link,updated,client_email,inbound_name,client_record,shared_client,enabled,inbound_expiry)
-                VALUES(?,?,?,?,'ready',?,?,?,?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO lines(id,panel_id,name,uuid,status,expiry,inbound_id,link,updated,client_email,inbound_name,client_record,shared_client,enabled,inbound_expiry,quota_bytes)
+                VALUES(?,?,?,?,'ready',?,?,?,?,?,?,?,?,?,?,?)")
                 .bind(Uuid::new_v4().to_string()).bind(panel_id).bind(b.name).bind(b.uuid).bind(b.expiry).bind(b.inbound_id).bind(b.link)
-                .bind(storage::now()).bind(b.email).bind(b.inbound_name).bind(b.client_id).bind(b.shared).bind(b.enabled).bind(b.inbound_expiry)
+                .bind(storage::now()).bind(b.email).bind(b.inbound_name).bind(b.client_id).bind(b.shared).bind(b.enabled).bind(b.inbound_expiry).bind(b.quota)
                 .execute(&mut *tx).await?;
             added += 1;
         }
@@ -369,6 +371,7 @@ mod tests {
         assert_eq!(other["added"], 3);
         clients[0]["email"] = json!("新名");
         clients[0]["expiryTime"] = json!(2000);
+        clients[0]["totalGB"] = json!(53_687_091_200_i64);
         clients[0]["inboundIds"] = json!([1]);
         inbounds[0]["remark"] = json!("新入站");
         inbounds[0]["port"] = json!(30444);
@@ -382,6 +385,7 @@ mod tests {
             .await?;
         assert_eq!(row.get::<String, _>("name"), "新入站 · 新名");
         assert_eq!(row.get::<i64, _>("expiry"), 2000);
+        assert_eq!(row.get::<i64, _>("quota_bytes"), 53_687_091_200_i64);
         let link = Url::parse(row.get("link"))?;
         assert_eq!(link.port(), Some(30444));
         let params: HashMap<_, _> = link.query_pairs().collect();

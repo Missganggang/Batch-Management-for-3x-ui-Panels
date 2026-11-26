@@ -66,6 +66,33 @@ async fn update(State(remote): Remote, Json(input): Json<Value>) -> Json<Value> 
     }
 }
 
+async fn mock_panel(
+    router: Router,
+) -> (
+    tempfile::TempDir,
+    Shared,
+    String,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let temp = tempfile::tempdir().unwrap();
+    let db = storage::open(temp.path()).await.unwrap();
+    let panel = storage::insert_panel(&db, "测试面板", &url, "", "test-only", "")
+        .await
+        .unwrap();
+    let app = Arc::new(App {
+        db,
+        client: reqwest::Client::new(),
+        locks: Default::default(),
+        traffic_lock: Default::default(),
+        upstream_slots: Semaphore::new(2),
+        backup_slot: Semaphore::new(1),
+    });
+    (temp, app, panel.id, task)
+}
+
 #[tokio::test]
 async fn native_edits_preserve_settings_and_retries_reconcile_an_ambiguous_write() {
     let remote = Arc::new(Mutex::new(Fixture {
@@ -79,23 +106,8 @@ async fn native_edits_preserve_settings_and_retries_reconcile_an_ambiguous_write
         .route("/panel/api/clients/get/:email", get(lookup))
         .route("/panel/api/clients/update/:email", post(update))
         .with_state(remote.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let temp = tempfile::tempdir().unwrap();
-    let db = storage::open(temp.path()).await.unwrap();
-    let panel = storage::insert_panel(&db, "测试面板", &url, "", "test-only", "")
-        .await
-        .unwrap();
-    let app: Shared = Arc::new(App {
-        db,
-        client: reqwest::Client::new(),
-        locks: Default::default(),
-        traffic_lock: Default::default(),
-        upstream_slots: Semaphore::new(2),
-        backup_slot: Semaphore::new(1),
-    });
-    let selection = json!({"panelId":panel.id,"clientId":3,"email":"client-a","uuid":"stable-id","expiryTime":0,"updatedAt":10,"note":"原备注"});
+    let (_temp, app, panel_id, task) = mock_panel(router).await;
+    let selection = json!({"panelId":panel_id,"clientId":3,"email":"client-a","uuid":"stable-id","expiryTime":0,"updatedAt":10,"note":"原备注"});
     let mut stale = selection.clone();
     stale["clientId"] = json!(4);
     let targets = json!([stale, selection]);
@@ -171,6 +183,106 @@ async fn native_edits_preserve_settings_and_retries_reconcile_an_ambiguous_write
         .0;
     assert_eq!(rejected["results"][0]["conflict"], true);
     assert_eq!(remote.lock().unwrap().writes, 4);
+    task.abort();
+    app.db.close().await;
+}
+
+#[tokio::test]
+async fn quota_updates_and_native_resets_affect_only_selected_clients() {
+    let remote = Arc::new(Mutex::new(json!({
+        "client":{"id":3,"email":"client-a","uuid":"stable-id","enable":false,"expiryTime":89012,"totalGB":0,"comment":"keep"},
+        "inboundIds":[5,7],"usedTraffic":2400
+    })));
+    type Mock = State<Arc<Mutex<Value>>>;
+    let router =
+        Router::new()
+            .route(
+                "/panel/api/clients/get/client-a",
+                get(|s: Mock| async move {
+                    Json(json!({"success":true,"obj":s.lock().unwrap().clone()}))
+                }),
+            )
+            .route(
+                "/panel/api/clients/update/client-a",
+                post(|s: Mock, Json(body): Json<Value>| async move {
+                    assert_eq!(body["id"], "stable-id");
+                    assert_eq!(body["expiryTime"], 89012);
+                    assert_eq!(body["comment"], "keep");
+                    assert_eq!(body["enable"], false);
+                    s.lock().unwrap()["client"]["totalGB"] = body["totalGB"].clone();
+                    Json(json!({"success":true,"obj":{"nodePending":false}}))
+                }),
+            )
+            .route(
+                "/panel/api/clients/resetTraffic/client-a",
+                post(|s: Mock| async move {
+                    s.lock().unwrap()["usedTraffic"] = json!(0);
+                    Json(json!({"success":true,"obj":null}))
+                }),
+            )
+            .with_state(remote.clone());
+    let (_temp, app, panel_id, task) = mock_panel(router).await;
+    sqlx::query(
+        "INSERT INTO lines(id,panel_id,name,uuid,status,expiry,updated,client_email,client_record)
+        VALUES('line',?,'line','stable-id','ready',89012,0,'client-a',3)",
+    )
+    .bind(&panel_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let target = json!({"panelId":panel_id,"clientId":3,"email":"client-a","uuid":"stable-id","quotaBytes":0});
+    let mut stale = target.clone();
+    stale["clientId"] = json!(9);
+    let targets = json!([stale, target]);
+    let cap = 200_i64 * 1024 * 1024 * 1024;
+    let change = |targets: &Value, bytes: i64| {
+        Json(serde_json::from_value(json!({"targets":targets,"quotaBytes":bytes})).unwrap())
+    };
+    assert!(quota(State(app.clone()), change(&targets, -1))
+        .await
+        .is_err());
+    for _ in 0..2 {
+        let reply = quota(State(app.clone()), change(&targets, cap))
+            .await
+            .unwrap_or_else(|e| panic!("{}", e.1))
+            .0;
+        assert_eq!(reply["results"][0]["ok"], false);
+        assert_eq!(reply["results"][1]["quotaBytes"], cap);
+        assert_eq!(remote.lock().unwrap()["usedTraffic"], 2400);
+    }
+    let cached: i64 = sqlx::query_scalar("SELECT quota_bytes FROM lines WHERE id='line'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(cached, cap);
+    let reply = quota(State(app.clone()), change(&targets, 10))
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(reply["results"][1]["conflict"], true);
+    let reset = |targets: &Value| Json(serde_json::from_value(json!({"targets":targets})).unwrap());
+    let invalid = super::super::reset_traffic(State(app.clone()), reset(&json!([stale])))
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(invalid["results"][0]["ok"], false);
+    assert_eq!(remote.lock().unwrap()["usedTraffic"], 2400);
+    let reply = super::super::reset_traffic(State(app.clone()), reset(&targets))
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(reply["results"][0]["ok"], false);
+    assert_eq!(reply["results"][1]["ok"], true);
+    assert_eq!(remote.lock().unwrap()["usedTraffic"], 0);
+    assert_eq!(remote.lock().unwrap()["client"]["totalGB"], cap);
+    let mut current = target;
+    current["quotaBytes"] = json!(cap);
+    let reply = quota(State(app.clone()), change(&json!([current]), 0))
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(reply["results"][0]["quotaBytes"], 0);
+    assert_eq!(remote.lock().unwrap()["client"]["totalGB"], 0);
     task.abort();
     app.db.close().await;
 }

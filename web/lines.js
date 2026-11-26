@@ -6,19 +6,98 @@
     const type=required?'radio':'checkbox';
     return '<div class="ln-months">'+durations.map(m=>'<label><input type="'+type+'" name="'+name+'" value="'+m+'" '+(required&&m===1?'checked required':'')+'><span>'+(m===12?'1 年':m+' 个月')+'</span></label>').join('')+'</div>';
   }
-  function optionalTerm(form) {
-    const options=[...form.querySelectorAll('input[name=months]')];
-    options.forEach(option=>option.addEventListener('change',()=>{
-      if(option.checked)options.forEach(other=>{if(other!==option)other.checked=false;});
-    }));
+  function quotaField({required = false} = {}) {
+    const buttons = [0, 100, 200, 500].map(gb =>
+      '<button type="button" data-quota="' + gb + '" aria-pressed="false">' + (gb ? gb + ' GB' : '不限') + '</button>'
+    ).join('');
+    return '<fieldset class="ln-limit-field"><legend>流量上限 <small>' +
+      (required ? '每个所选客户端' : '每个客户端 · 留空不限') + '</small></legend>' +
+      '<div class="ln-quota-input"><input type="text" inputmode="decimal" name="quotaGB" aria-label="流量上限（GB）" ' +
+      'aria-required="' + required + '" placeholder="输入自定义额度" autocomplete="off"><span>GB</span></div>' +
+      '<div class="ln-quota-options">' + buttons + '</div></fieldset>';
   }
-  const selectedMonths=form=>Number(form.querySelector('input[name=months]:checked')?.value||0);
+
+  function bindQuota(form) {
+    const input = form.querySelector('[name=quotaGB]');
+    const buttons = [...form.querySelectorAll('[data-quota]')];
+    const update = () => {
+      const value = input.value.trim();
+      buttons.forEach(button => button.setAttribute('aria-pressed', String(value !== '' && Number(value) === Number(button.dataset.quota))));
+    };
+    for (const button of buttons) {
+      button.onclick = () => {
+        input.value = button.dataset.quota;
+        input.dispatchEvent(new Event('input', {bubbles:true}));
+      };
+    }
+    input.addEventListener('input', update);
+    update();
+    return () => {
+      const value = input.value.trim();
+      if (!value && input.getAttribute('aria-required') === 'true') {
+        input.focus();
+        throw Error('请输入流量额度，或选择「不限」。');
+      }
+      if (!value) return 0;
+      const bytes = Math.round(Number(value) * 1024 ** 3);
+      if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) || !Number.isSafeInteger(bytes) ||
+          (bytes === 0 && /[1-9]/.test(value))) {
+        input.focus();
+        throw Error('流量上限请填写有效的 GB 数值，可用小数，0 表示不限。');
+      }
+      return bytes;
+    };
+  }
+
+  function createLimits() {
+    return '<div class="ln-limits"><fieldset class="ln-limit-field"><legend>到期时间 <small>当前设备时区 · 留空永久</small></legend>' +
+      '<input type="text" name="exactExpiry" aria-label="自定义到期时间" autocomplete="off" spellcheck="false" ' +
+      'placeholder="例如 2027-04-22 12:36:10" title="支持 2027-04-22 12:36:10 或 2026/12/4 18:01:13">' +
+      monthOptions('months') + '</fieldset>' + quotaField() + '</div>';
+  }
+
+  function parseLocalExpiry(input) {
+    const value = input.value.trim();
+    if (!value) return 0;
+    const parts = /^(\d{4})([-/])(\d{1,2})\2(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/.exec(value);
+    if (!parts) {
+      input.focus();
+      throw Error('到期时间请输入完整的日期和时分秒，例如 2027-04-22 12:36:10 或 2026/12/4 18:01:13。');
+    }
+    const [year, month, day, hour, minute, second] = [parts[1], ...parts.slice(3)].map(Number);
+    const date = new Date(year, month - 1, day, hour, minute, second);
+    if (date.getTime() <= 0 || date.getFullYear() !== year || date.getMonth() + 1 !== month ||
+        date.getDate() !== day || date.getHours() !== hour || date.getMinutes() !== minute || date.getSeconds() !== second) {
+      input.focus();
+      throw Error('到期日期或时间无效，请检查年月日和时分秒。');
+    }
+    return date.getTime();
+  }
+
+  function bindLimits(form) {
+    const exactExpiry = form.elements.exactExpiry;
+    const options = [...form.querySelectorAll('input[name=months]')];
+    for (const option of options) {
+      option.addEventListener('change', () => {
+        if (!option.checked) return;
+        exactExpiry.value = '';
+        options.forEach(other => { other.checked = other === option; });
+      });
+    }
+    exactExpiry.addEventListener('input', () => options.forEach(option => { option.checked = false; }));
+    const readQuota = bindQuota(form);
+    return () => {
+      const selected = options.find(option => option.checked);
+      const term = selected ? {months:Number(selected.value)} : {expiryTime:parseLocalExpiry(exactExpiry)};
+      return {...term, quotaBytes:readQuota()};
+    };
+  }
   function effectiveExpiry(line) {
     const limits=[line.expiryTime,line.inboundExpiryTime].filter(value=>Number(value)>0);
     return limits.length ? Math.min(...limits) : line.expiryTime;
   }
   const lineStatus=l=>l.status==='failed'?['bad','创建失败']:l.status==='pending'?['idle','处理中']:effectiveExpiry(l)>0&&effectiveExpiry(l)<=Date.now()?['bad','已到期']:l.enabled===false?['quiet','已停用']:l.online===true?['good','在线']:l.online===false?['quiet','离线']:['quiet','状态未知'];
-  const date=t=>Number(t)>0?new Date(t).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}):t===0?'永久有效':'—';
+  const date=t=>Number(t)>0?new Date(t).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}):t===0?'永久有效':'—';
   function traffic(n) {
     if(n==null||!Number.isFinite(Number(n)))return '—';
     const i=Math.min(5,Math.max(0,Math.floor(Math.log(Math.max(Number(n),1))/Math.log(1024))));
@@ -100,11 +179,11 @@
   }
   function createPage(host,ctx) {
     const root=document.createElement('div');root.className='ln-page';
-    root.innerHTML='<div class="ln-heading"><div><h1>线路管理</h1><p><span class="ln-protocol">'+icon('shield-check',13)+'VLESS</span><span>TCP</span><i></i><span>Reality</span></p></div><button class="nx-button" data-refresh>'+icon('refresh-cw',14)+'刷新</button></div><section class="ln-compose"><div class="ln-compose-heading"><div class="ln-compose-icon">'+icon('route',21)+'</div><div><h2>新建线路</h2><p>同一个名称将用于入站、客户端和 SOCKS5 出站。</p></div></div><form class="ln-form"><div class="ln-fields"><label>线路名称<input name="name" required maxlength="80" autocomplete="off" placeholder="例如 中国台湾210.65.177.177"></label><label>SOCKS5 出口<span class="ln-secret"><input type="text" name="socks5" required autocomplete="off" spellcheck="false" placeholder="socks5://user:pass@host:port"><button type="button" data-visibility aria-label="隐藏 SOCKS5">'+icon('eye-off',16)+'</button></span></label></div><div class="ln-form-bottom"><fieldset><legend>使用期限 <small>不选即永久有效</small></legend>'+monthOptions('months')+'</fieldset><label class="ln-panel-select"><span>目标面板</span><select name="panelId" aria-label="目标面板" disabled><option>正在读取面板…</option></select></label><div class="ln-create-actions"><button type="button" class="nx-button ln-batch-open" data-batch disabled>'+icon('layers',15)+'批量创建线路</button><button class="nx-button nx-primary ln-submit" type="submit" disabled>'+icon('plus',16)+'创建线路</button></div></div><div class="ln-panel-support"><button type="button" data-add>'+icon('server',14)+'接入面板</button><button type="button" data-host hidden>'+icon('settings-2',14)+'分享地址</button></div><div class="ln-form-error" role="alert"></div></form></section><div class="ln-alerts" aria-live="polite"></div><section class="ln-list"><div class="ln-list-head"><div><h2>我的线路</h2><b data-total>0</b></div><label class="ln-search">'+icon('search',15)+'<input type="search" placeholder="搜索线路" aria-label="搜索线路"></label></div><div class="ln-table-wrap"><table><thead><tr><th>线路名称</th><th>在线状态</th><th>已用流量</th><th>到期日期</th><th>操作</th></tr></thead><tbody></tbody></table></div><div class="ln-empty" role="status">正在读取线路…</div></section>';
+    root.innerHTML='<div class="ln-heading"><div><h1>线路管理</h1><p><span class="ln-protocol">'+icon('shield-check',13)+'VLESS</span><span>TCP</span><i></i><span>Reality</span></p></div><button class="nx-button" data-refresh>'+icon('refresh-cw',14)+'刷新</button></div><section class="ln-compose"><div class="ln-compose-heading"><div class="ln-compose-icon">'+icon('route',21)+'</div><div><h2>新建线路</h2><p>同一个名称将用于入站、客户端和 SOCKS5 出站。</p></div></div><form class="ln-form"><div class="ln-fields"><label>线路名称<input name="name" required maxlength="80" autocomplete="off" placeholder="例如 中国台湾210.65.177.177"></label><label>SOCKS5 出口<span class="ln-secret"><input type="text" name="socks5" required autocomplete="off" spellcheck="false" placeholder="socks5://user:pass@host:port"><button type="button" data-visibility aria-label="隐藏 SOCKS5">'+icon('eye-off',16)+'</button></span></label></div>'+createLimits()+'<div class="ln-form-bottom"><label class="ln-panel-select"><span>目标面板</span><select name="panelId" aria-label="目标面板" disabled><option>正在读取面板…</option></select></label><div class="ln-create-actions"><button type="button" class="nx-button ln-batch-open" data-batch disabled>'+icon('layers',15)+'批量创建线路</button><button class="nx-button nx-primary ln-submit" type="submit" disabled>'+icon('plus',16)+'创建线路</button></div></div><div class="ln-panel-support"><button type="button" data-add>'+icon('server',14)+'接入面板</button><button type="button" data-host hidden>'+icon('settings-2',14)+'分享地址</button></div><div class="ln-form-error" role="alert"></div></form></section><div class="ln-alerts" aria-live="polite"></div><section class="ln-list"><div class="ln-list-head"><div><h2>我的线路</h2><b data-total>0</b></div><div class="ln-list-tools"><a class="ln-manage-traffic" href="#clients">管理流量</a><label class="ln-search">'+icon('search',15)+'<input type="search" placeholder="搜索线路" aria-label="搜索线路"></label></div></div><div class="ln-table-wrap"><table><thead><tr><th>线路名称</th><th>在线状态</th><th>已用流量 / 上限</th><th>到期时间</th><th>操作</th></tr></thead><tbody></tbody></table></div><div class="ln-empty" role="status">正在读取线路…</div></section>';
     host.replaceChildren(root);
     const model={root,ctx,panels:[],lines:[],errors:[],request:0,ready:false,creating:false,refreshing:false};
     const form=root.querySelector('form'),btn=form.querySelector('[type=submit]'),panelChoice=form.elements.panelId;
-    optionalTerm(form);
+    const readLimits = bindLimits(form);
     root.querySelector('[data-batch]').onclick=()=>batchCreate(model);
     const addPanel=()=>window.Workflows.open('add-panel',ctx);
     root.querySelector('[data-add]').onclick=addPanel;
@@ -120,17 +199,21 @@
     form.onsubmit=async e=>{
       e.preventDefault();if(model.creating)return;
       if(!panelChoice.value){addPanel();return;}
-      const body={panelId:panelChoice.value,name:form.elements.name.value.trim(),socks5:form.elements.socks5.value.trim(),months:selectedMonths(form)};
+      const body={panelId:panelChoice.value,name:form.elements.name.value.trim(),socks5:form.elements.socks5.value.trim()};
       const output=form.querySelector('[role=alert]');
       if(!body.name||!body.socks5){output.textContent='请填写线路名称和 SOCKS5 出口';return;}
       if(/[\s/\\]/u.test(body.name)||['api','.','..'].includes(body.name)){
         output.textContent='请使用不含空格或斜杠的线路名称，避开保留名称 api、. 和 ..';form.elements.name.focus();return;
       }
+      try { Object.assign(body, readLimits()); }
+      catch(error) { output.textContent=error.message;return; }
       output.textContent='';model.creating=true;btn.disabled=true;btn.textContent='正在创建…';form.inert=true;
       try{
         const {line}=await ctx.api('/api/lines',{method:'POST',body});
         remember(body.panelId);form.elements.socks5.value='';form.elements.name.value='';
         form.querySelectorAll('input[name=months]').forEach(choice=>choice.checked=false);
+        form.elements.exactExpiry.value='';form.elements.quotaGB.value='';
+        form.elements.quotaGB.dispatchEvent(new Event('input'));
         if(line?.link&&root.isConnected)share(line,ctx);
         else ctx.toast(line?.status==='failed'?'线路创建失败，请查看列表中的原因':'线路已提交');
       }catch(error){output.textContent=error.message;}
@@ -175,8 +258,9 @@
     root.querySelector('tbody').innerHTML=list.map(l=>{
       const [tone,label]=lineStatus(l);
       const total=l.up!=null && l.down!=null ? traffic(Number(l.up)+Number(l.down)) : '—';
+      const quota=l.quotaBytes==null?'—':l.quotaBytes===0?'不限':traffic(l.quotaBytes);
       const error=l.error?'<small class="ln-row-error">'+esc(l.error)+'</small>':'';
-      return '<tr><td><div class="ln-line-name"><span>'+icon('route',17)+'</span><div><strong>'+esc(l.name)+'</strong><small>'+esc(l.panelName||'—')+'</small>'+error+'</div></div></td><td><span class="ln-status '+tone+'"><i></i>'+label+'</span></td><td><strong class="ln-used">'+total+'</strong><div class="ln-traffic"><span title="上行流量">'+icon('arrow-up',12)+traffic(l.up)+'</span><span title="下行流量">'+icon('arrow-down',12)+traffic(l.down)+'</span></div></td><td>'+esc(date(effectiveExpiry(l)))+'</td><td><div class="ln-row-actions">'+(l.status==='ready'?(l.link?act(l,'share',icon('external-link',13)+'分享'):'')+act(l,'renew','续期')+(l.name===l.clientName&&l.name===l.inboundName?act(l,'reality','检测与修复'):''):l.status==='failed'?act(l,'retry','重试'):'—')+'</div></td></tr>';
+      return '<tr><td><div class="ln-line-name"><span>'+icon('route',17)+'</span><div><strong>'+esc(l.name)+'</strong><small>'+esc(l.panelName||'—')+'</small>'+error+'</div></div></td><td><span class="ln-status '+tone+'"><i></i>'+label+'</span></td><td><strong class="ln-used">'+total+' <span class="ln-quota-total">/ '+quota+'</span></strong><div class="ln-traffic"><span title="上行流量">'+icon('arrow-up',12)+traffic(l.up)+'</span><span title="下行流量">'+icon('arrow-down',12)+traffic(l.down)+'</span></div></td><td>'+esc(date(effectiveExpiry(l)))+'</td><td><div class="ln-row-actions">'+(l.status==='ready'?(l.link?act(l,'share',icon('external-link',13)+'分享'):'')+act(l,'renew','续期')+(l.name===l.clientName&&l.name===l.inboundName?act(l,'reality','检测与修复'):''):l.status==='failed'?act(l,'retry','重试'):'—')+'</div></td></tr>';
     }).join('');
   }
   async function load(model,manual=false) {
@@ -247,7 +331,7 @@
           '<label><span>SOCKS5 出口 <output data-socks-count>0 条</output></span><textarea name="socks" rows="7" wrap="off" spellcheck="false" autocomplete="off" placeholder="socks5://user:pass@hk.example.com:1080&#10;jp.example.com:1080:user:pass"></textarea></label>'+
         '</div><p data-paste-help>按行配对。第 1 个名称使用右侧第 1 行的出口。</p><div class="ln-form-error" data-pair-error aria-live="polite"></div>'+
         '<label class="ln-panel-select">目标面板<select name="panelId" required></select></label>'+
-        '<fieldset><legend>使用期限 <small>不选即永久有效</small></legend>'+monthOptions('months')+'</fieldset>'+
+        createLimits()+
         '<div data-results aria-live="polite"></div><div class="ln-form-error" role="alert"></div>'+
         '<div class="ln-batch-footer"><button class="nx-button" type="button" data-clients hidden>查看客户端</button><button class="nx-button nx-primary" type="submit">创建线路</button></div>'+
       '</form>',ctx);
@@ -259,7 +343,7 @@
     let submitted=false,processing=false;
     model.panels.forEach(p=>panel.add(new Option(p.name,p.id)));
     panel.value=active;
-    optionalTerm(form);
+    const readLimits = bindLimits(form);
     function validate(){
       const batch=readColumns(names.value,socks.value,outcomes);
       form.querySelector('[data-name-count]').textContent=batch.names+' 条';
@@ -280,10 +364,13 @@
       if(processing)return;
       const {lines,error}=validate();
       if(error||!lines.length||!panel.value)return;
+      let limits;
+      try { limits=readLimits(); }
+      catch(err) { message.textContent=err.message;return; }
       processing=true;form.inert=true;d.querySelector('[data-close]').disabled=true;
       submit.textContent='正在创建…';message.textContent='';
       try{
-        const body={panelId:panel.value,months:selectedMonths(form),lines};
+        const body={panelId:panel.value,...limits,lines};
         const response=await ctx.api('/api/lines/batch',{method:'POST',body});
         if(!Array.isArray(response.results))throw Error('未收到逐行结果，请刷新线路列表核对');
         const byName=new Map(response.results.map(item=>[item.name,item]));
@@ -305,7 +392,8 @@
         results.replaceChildren(summary,list);
         names.value=failed.map(item=>item.name).join('\n');
         socks.value=failed.map(item=>item.socks5).join('\n');
-        panel.disabled=true;form.querySelector('fieldset').disabled=true;
+        panel.disabled=true;
+        if(!failed.length)form.querySelectorAll('.ln-limit-field').forEach(field=>field.disabled=true);
         clients.hidden=!success;submitted=true;remember(panel.value);
         if(failed.length){
           form.querySelector('[data-paste-help]').textContent='已保留失败的线路和出口。修改后可再次提交。';
@@ -383,6 +471,6 @@
     if(!page?.root.isConnected)page=createPage(host,ctx);
     await load(page);
   }
-  window.Lines={mount,share};
+  window.Lines={mount,share,quotaField,bindQuota};
   setInterval(()=>{if(page?.root.isConnected&&!document.hidden&&!page.refreshing&&!page.creating&&!document.querySelector('dialog[open]'))load(page);},30000);
 })();

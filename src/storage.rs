@@ -103,6 +103,17 @@ pub async fn open(dir: &Path) -> Result<SqlitePool> {
             CREATE UNIQUE INDEX lines_client_binding ON lines(panel_id,inbound_id,client_record) WHERE client_record IS NOT NULL;
             CREATE INDEX lines_panel ON lines(panel_id);").execute(&mut *tx).await?;
     }
+    let quota_column: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pragma_table_info('lines') WHERE name='quota_bytes'",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if quota_column == 0 {
+        // A previously synced client may have a limit that we haven't read yet.
+        sqlx::query("ALTER TABLE lines ADD COLUMN quota_bytes INTEGER")
+            .execute(&mut *tx)
+            .await?;
+    }
     let hosts: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pragma_table_info('panels') WHERE name='public_host'",
     )

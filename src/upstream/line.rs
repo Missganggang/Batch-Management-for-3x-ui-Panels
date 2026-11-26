@@ -69,6 +69,8 @@ impl PanelApi {
         )?;
         let expiry = spec["expiryTime"].as_i64().unwrap_or(0);
         ensure!(expiry >= 0, "到期时间无效");
+        let quota = spec["quotaBytes"].as_i64().unwrap_or(0);
+        ensure!(quota >= 0, "流量上限无效");
         let (inbounds, clients, wrapper) =
             tokio::try_join!(self.inbounds(), self.clients(), self.xray_settings())?;
         let matches = inbounds
@@ -128,7 +130,7 @@ impl PanelApi {
             ib["tag"] = json!(name);
             ib["enable"] = json!(false);
             ib["settings"]["clients"] = json!([{"id":uuid,"email":name,"flow":"xtls-rprx-vision",
-                "subId":Uuid::new_v4().simple().to_string(),"enable":true,"expiryTime":expiry}]);
+                "subId":Uuid::new_v4().simple().to_string(),"enable":true,"expiryTime":expiry,"totalGB":quota}]);
             let created = self
                 .obj(self.request(Method::POST, "inbounds/add").json(&ib))
                 .await?;
@@ -143,9 +145,15 @@ impl PanelApi {
             .as_u64()
             .and_then(|p| u16::try_from(p).ok())
             .context("面板入站端口无效")?;
-        let flow = ib["settings"]["clients"][0]["flow"]
-            .as_str()
-            .unwrap_or_default();
+        let client = &ib["settings"]["clients"][0];
+        let flow = client["flow"].as_str().unwrap_or_default();
+        let actual_expiry = client["expiryTime"].as_i64().unwrap_or(0);
+        let actual_quota = client["totalGB"].as_i64().unwrap_or(0);
+        ensure!(
+            (ib["enable"] == true && previous.is_some())
+                || (actual_expiry == expiry && actual_quota == quota),
+            "面板返回的客户端期限或流量上限与请求不同，请核对"
+        );
         let link = share_link(&ib, name, &uuid, &connect, flow)?;
         // Fetch again after creating the inbound to preserve intervening template edits.
         let wrapper = self.xray_settings().await?;
@@ -173,7 +181,8 @@ impl PanelApi {
         }
         Ok(
             json!({"name":name,"email":name,"inboundId":id,"inboundTag":name,"outboundTag":name,
-            "ruleTag":name,"port":port,"uuid":uuid,"connectHost":connect,"link":link}),
+            "ruleTag":name,"port":port,"uuid":uuid,"connectHost":connect,"link":link,
+            "expiryTime":actual_expiry,"quotaBytes":actual_quota}),
         )
     }
 

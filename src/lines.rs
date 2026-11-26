@@ -117,6 +117,7 @@ fn line(row: &SqliteRow) -> Value {
         "inboundId":row.get::<Option<i64>,_>("inbound_id"),"sharedClient":row.get::<bool,_>("shared_client"),
         "enabled":row.get::<bool,_>("enabled"),"inboundExpiryTime":row.get::<i64,_>("inbound_expiry"),
         "panelName":row.get::<String,_>("panel_name"),"status":row.get::<String,_>("status"),"expiryTime":row.get::<i64,_>("expiry"),
+        "quotaBytes":row.get::<Option<i64>,_>("quota_bytes"),
         "updatedAt":row.get::<i64,_>("updated"),"error":row.get::<Option<String>,_>("error"),"link":row.get::<Option<String>,_>("link"),
         "online":null,"up":null,"down":null})
 }
@@ -133,8 +134,8 @@ async fn by_id(db: &SqlitePool, id: &str) -> ApiResult<SqliteRow> {
 #[serde(rename_all = "camelCase")]
 pub struct CreateLine {
     panel_id: String,
-    #[serde(default)]
-    months: u32,
+    #[serde(flatten)]
+    limits: CreationLimits,
     #[serde(flatten)]
     line: LineInput,
 }
@@ -149,16 +150,33 @@ struct LineInput {
 #[serde(rename_all = "camelCase")]
 pub struct CreateBatch {
     panel_id: String,
-    #[serde(default)]
-    months: u32,
+    #[serde(flatten)]
+    limits: CreationLimits,
     lines: Vec<LineInput>,
 }
 
-fn creation_expiry(months: u32) -> ApiResult<i64> {
-    if months == 0 {
-        return Ok(0);
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct CreationLimits {
+    months: u32,
+    expiry_time: Option<i64>,
+    quota_bytes: i64,
+}
+
+impl CreationLimits {
+    fn resolve(&self) -> ApiResult<(i64, i64)> {
+        if self.quota_bytes < 0 {
+            return Err(ApiError::bad("流量上限须为非负整数字节，0 表示不限"));
+        }
+        let end = match (self.expiry_time, self.months) {
+            (Some(end @ 0..=8_640_000_000_000_000), 0) => end,
+            (Some(_), 0) => return Err(ApiError::bad("自定义到期时间超出范围")),
+            (Some(_), _) => return Err(ApiError::bad("请选择快捷期限或自定义到期时间中的一项")),
+            (None, 0) => 0,
+            (None, months) => expiry(storage::now(), months)?,
+        };
+        Ok((end, self.quota_bytes))
     }
-    expiry(storage::now(), months)
 }
 
 fn validate_line(input: &LineInput) -> ApiResult<()> {
@@ -184,13 +202,13 @@ pub async fn create(
     Json(input): Json<CreateLine>,
 ) -> ApiResult<Json<Value>> {
     validate_line(&input.line)?;
-    let end = creation_expiry(input.months)?;
+    let limits = input.limits.resolve()?;
     // Keep a network interruption in the browser from abandoning partially applied upstream work.
     let line = tokio::spawn(async move {
         let _guard = app.lock(&input.panel_id).await;
         let panel = app.panel(&input.panel_id).await?;
         let api = panel.api(&app.client)?;
-        provision(&app, &panel, &api, &input.line, end).await
+        provision(&app, &panel, &api, &input.line, limits).await
     })
     .await
     .context("线路任务中断")??;
@@ -204,7 +222,7 @@ pub async fn create_batch(
     if input.lines.is_empty() {
         return Err(ApiError::bad("请至少填写一条线路"));
     }
-    let end = creation_expiry(input.months)?;
+    let limits = input.limits.resolve()?;
     // A single panel's Xray template is replaced as a whole. Write its lines in
     // input order and isolate individual failures just as for single creation.
     tokio::spawn(async move {
@@ -218,7 +236,7 @@ pub async fn create_batch(
             let result = match validate_line(entry) {
                 Err(err) => Err(err),
                 Ok(()) if !names.insert(name) => Err(ApiError::bad("该名称在本批线路中重复")),
-                Ok(()) => provision(&app, &panel, &api, entry, end).await,
+                Ok(()) => provision(&app, &panel, &api, entry, limits).await,
             };
             results.push(match result {
                 Ok(line) => json!({"name":name,"ok":true,"message":"已创建","line":line}),
@@ -236,7 +254,7 @@ async fn provision(
     panel: &storage::Panel,
     api: &crate::PanelApi,
     input: &LineInput,
-    end: i64,
+    (end, quota): (i64, i64),
 ) -> ApiResult<Value> {
     let name = input.name.trim();
     let id = Uuid::new_v4().to_string();
@@ -249,8 +267,8 @@ async fn provision(
             "面板已存在同名入站或客户端".into(),
         ));
     }
-    sqlx::query("INSERT INTO lines(id,panel_id,name,client_email,inbound_name,uuid,status,expiry,updated) VALUES(?,?,?,?,?,?,'pending',?,?) ON CONFLICT DO NOTHING")
-        .bind(&id).bind(&panel.id).bind(name).bind(name).bind(name).bind(&uid).bind(end).bind(storage::now()).execute(&app.db).await.context("无法预留线路")?;
+    sqlx::query("INSERT INTO lines(id,panel_id,name,client_email,inbound_name,uuid,status,expiry,quota_bytes,updated) VALUES(?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT DO NOTHING")
+        .bind(&id).bind(&panel.id).bind(name).bind(name).bind(name).bind(&uid).bind(end).bind(quota).bind(storage::now()).execute(&app.db).await.context("无法预留线路")?;
     let row = sqlx::query(&format!(
         "{SELECT_LINES} WHERE l.panel_id=? AND l.name=? AND l.status IN ('pending','failed')"
     ))
@@ -261,7 +279,7 @@ async fn provision(
     .context("无法取得线路")?;
     let rid = row.get::<String, _>("id");
     let uuid = row.get::<String, _>("uuid");
-    let spec = json!({"name":name,"socks5":input.socks5.trim(),"connectHost":if panel.public_host.is_empty(){None}else{Some(&panel.public_host)},"expiryTime":row.get::<i64,_>("expiry")});
+    let spec = json!({"name":name,"socks5":input.socks5.trim(),"connectHost":if panel.public_host.is_empty(){None}else{Some(&panel.public_host)},"expiryTime":row.get::<i64,_>("expiry"),"quotaBytes":row.get::<Option<i64>,_>("quota_bytes").unwrap_or(0)});
     sqlx::query("UPDATE lines SET status='pending',error=NULL,updated=? WHERE id=?")
         .bind(storage::now())
         .bind(&rid)
@@ -273,8 +291,14 @@ async fn provision(
         Ok(result) => {
             let link = result["link"].as_str().context("面板未返回分享链接")?;
             let inbound = result["inboundId"].as_i64().context("面板未返回入站 ID")?;
-            sqlx::query("UPDATE lines SET status='ready',link=?,inbound_id=?,error=NULL,updated=? WHERE id=?")
-                .bind(link).bind(inbound).bind(storage::now()).bind(&rid).execute(&app.db).await.context("保存开通结果失败")?;
+            let end = result["expiryTime"]
+                .as_i64()
+                .context("面板未返回客户端到期时间")?;
+            let quota = result["quotaBytes"]
+                .as_i64()
+                .context("面板未返回客户端流量上限")?;
+            sqlx::query("UPDATE lines SET status='ready',link=?,inbound_id=?,expiry=?,quota_bytes=?,error=NULL,updated=? WHERE id=?")
+                .bind(link).bind(inbound).bind(end).bind(quota).bind(storage::now()).bind(&rid).execute(&app.db).await.context("保存开通结果失败")?;
             Ok(line(&by_id(&app.db, &rid).await?))
         }
         Err(err) => {
@@ -522,6 +546,9 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
                 if client["expiryTime"].is_i64() {
                     dst["expiryTime"] = client["expiryTime"].clone();
                 }
+                if client["totalGB"].as_i64().is_some_and(|n| n >= 0) {
+                    dst["quotaBytes"] = client["totalGB"].clone();
+                }
             } else {
                 dst["error"] = json!("原客户端已移除或改名，请检查目标面板");
             }
@@ -565,13 +592,38 @@ mod tests {
             "panelId":"panel","lines":[entry]
         }))
         .unwrap();
-        for months in [single.months, batch.months] {
-            assert_eq!(creation_expiry(months).ok(), Some(0));
+        for limits in [single.limits, batch.limits] {
+            assert_eq!(limits.resolve().ok(), Some((0, 0)));
         }
-        assert!(creation_expiry(1)
+        let limits: CreationLimits = serde_json::from_value(json!({"months":1})).unwrap();
+        assert!(limits
+            .resolve()
             .ok()
-            .is_some_and(|end| end > storage::now()));
-        assert!(creation_expiry(4).is_err());
+            .is_some_and(|(end, _)| end > storage::now()));
+        let date = 1_890_046_800_000_i64;
+        let quota = 123_456_789_012_i64;
+        let single: CreateLine = serde_json::from_value(
+            json!({"panelId":"p","name":"a","socks5":"s","quotaBytes":quota,"expiryTime":date}),
+        )
+        .unwrap();
+        let batch: CreateBatch = serde_json::from_value(
+            json!({"panelId":"p","lines":[entry],"quotaBytes":quota,"expiryTime":date}),
+        )
+        .unwrap();
+        for limits in [single.limits, batch.limits] {
+            assert_eq!(limits.resolve().ok(), Some((date, quota)));
+        }
+        for invalid in [
+            json!({"months":4}),
+            json!({"months":3,"expiryTime":date}),
+            json!({"expiryTime":-1}),
+            json!({"quotaBytes":-2}),
+        ] {
+            assert!(serde_json::from_value::<CreationLimits>(invalid)
+                .unwrap()
+                .resolve()
+                .is_err());
+        }
     }
 
     #[test]

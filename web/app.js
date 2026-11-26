@@ -31,7 +31,7 @@
   const modeButton = document.getElementById('mode-toggle');
   let selectedRange = 24, filter = 'all', chartObserver, requestId = 0, advancedOpen = false;
   let loading = false;
-  const ctx = {state,icon,esc,toast,navigate,refresh,setMode,api,render};
+  const ctx = {state,icon,esc,toast,navigate,refresh,setMode,api,render,bytes};
 
   function toast(message, type='success') {
     const stack = document.getElementById('nx-toast-stack');

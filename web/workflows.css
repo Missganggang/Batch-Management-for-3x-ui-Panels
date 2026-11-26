@@ -71,6 +71,10 @@
 .wf-options {display:flex;align-items:center;gap:12px}
 .wf-check {display:inline-flex;align-items:center;gap:7px;font-size:13px;cursor:pointer}
 .wf-panel-actions{display:inline-flex;align-items:center;gap:12px;white-space:nowrap}
+.wf-panel-visit {padding:4px 9px;border:1px solid #e3dff8;background:#f7f6ff}
+.wf-panel-visit:hover {background:var(--wf-soft);text-decoration:none}
+.wf-panel-visit svg {width:14px;height:14px}
+.wf-traffic-cell {display:grid;gap:3px;font-variant-numeric:tabular-nums}
 .wf-link[data-wf-row="panel-remove"],.wf-danger-link,.nx-table button[data-action="panel-remove"]{color:#aa4d48}
 .wf-button.wf-danger{background:#aa3f39;border-color:#aa3f39;color:#fff}
 .wf-button.wf-danger:hover{background:#933a35}
@@ -174,9 +178,10 @@
   .wf-clients .wf-table tbody td:nth-child(n+3)::before {min-width:3.3em;color:var(--wf-muted);font-size:12px}
   .wf-clients .wf-table tbody td:nth-child(3)::before {content:"入站"}
   .wf-clients .wf-table tbody td:nth-child(4)::before {content:"到期"}
-  .wf-clients .wf-table tbody td:nth-child(5)::before {content:"分享"}
-  .wf-clients .wf-table tbody td:nth-child(6)::before {content:"操作"}
-  .wf-clients .wf-table tbody td:nth-child(7)::before {content:"备注"}
+  .wf-clients .wf-table tbody td:nth-child(5)::before {content:"流量"}
+  .wf-clients .wf-table tbody td:nth-child(6)::before {content:"分享"}
+  .wf-clients .wf-table tbody td:nth-child(7)::before {content:"操作"}
+  .wf-clients .wf-table tbody td:nth-child(8)::before {content:"备注"}
   .wf-clients .wf-binding-list {flex-wrap:wrap}
   .wf-clients .wf-note-editor {min-width:0;padding:0}
   .wf-clients .wf-note-editor span {white-space:normal;overflow-wrap:anywhere}

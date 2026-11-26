@@ -161,6 +161,12 @@ impl PanelApi {
         self.obj(self.request_url(Method::GET, url)).await
     }
 
+    pub async fn reset_client_traffic(&self, email: &str) -> Result<()> {
+        let url = self.item_url("clients/resetTraffic/", email)?;
+        self.obj(self.request_url(Method::POST, url)).await?;
+        Ok(())
+    }
+
     pub async fn save_client_record(
         &self,
         record: Value,

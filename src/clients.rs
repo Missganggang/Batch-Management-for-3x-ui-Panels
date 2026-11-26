@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 mod edit;
 mod export;
 mod qr_png;
-pub use edit::{extend, notes};
+pub use edit::{extend, notes, quota};
 pub use export::export;
 
 pub async fn links(
@@ -53,10 +53,11 @@ struct Target {
     expiry_time: Option<i64>,
     updated_at: Option<i64>,
     note: Option<String>,
+    quota_bytes: Option<i64>,
 }
 
 #[derive(Deserialize)]
-pub struct DeleteClients {
+pub struct ClientSelection {
     targets: Vec<Target>,
 }
 
@@ -132,15 +133,24 @@ async fn delete_target(
 
 pub async fn delete(
     State(app): State<Shared>,
-    Json(input): Json<DeleteClients>,
+    Json(input): Json<ClientSelection>,
 ) -> ApiResult<Json<Value>> {
     execute(app, input.targets, Operation::Delete).await
+}
+
+pub async fn reset_traffic(
+    State(app): State<Shared>,
+    Json(input): Json<ClientSelection>,
+) -> ApiResult<Json<Value>> {
+    execute(app, input.targets, Operation::ResetTraffic).await
 }
 
 enum Operation {
     Delete,
     Extend(edit::Term),
     Notes(String),
+    Quota(i64),
+    ResetTraffic,
 }
 
 async fn execute(
@@ -212,6 +222,10 @@ async fn run_batch(app: Shared, targets: Vec<Target>, operation: Operation) -> R
                                 Operation::Notes(note) => {
                                     edit::note_target(&target, api, note).await
                                 }
+                                Operation::Quota(bytes) => {
+                                    edit::quota_target(&app.db, &target, api, *bytes).await
+                                }
+                                Operation::ResetTraffic => edit::reset_target(&target, api).await,
                             }
                         }
                         Err(err) => Err(anyhow::anyhow!("{err:#}")),
@@ -251,6 +265,8 @@ async fn run_batch(app: Shared, targets: Vec<Target>, operation: Operation) -> R
         Operation::Delete => "client.delete",
         Operation::Extend(_) => "client.extend",
         Operation::Notes(_) => "client.notes",
+        Operation::Quota(_) => "client.quota",
+        Operation::ResetTraffic => "client.resetTraffic",
     };
     storage::log_start(&app.db, action, &outcomes).await?;
     Ok(results)

@@ -1,0 +1,16 @@
+services:
+  nexus:
+    image: nexus-web:local
+    build: .
+    restart: unless-stopped
+    environment:
+      NEXUS_ADMIN_PASSWORD: ${NEXUS_ADMIN_PASSWORD:?Set NEXUS_ADMIN_PASSWORD in .env}
+      NEXUS_PANEL_DELETE_PASSWORD: ${NEXUS_PANEL_DELETE_PASSWORD:-}
+      NEXUS_LINE_PORT_RANGE: ${NEXUS_LINE_PORT_RANGE:-20000-20999}
+      NEXUS_REALITY_TARGET: ${NEXUS_REALITY_TARGET:-www.amd.com:443}
+    ports:
+      - "127.0.0.1:${NEXUS_PORT:-8787}:8787"
+    volumes:
+      - nexus-data:/var/lib/nexus
+volumes:
+  nexus-data:

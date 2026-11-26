@@ -1,0 +1,176 @@
+use super::*;
+use crate::{App, Shared};
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use std::sync::{Arc, Mutex};
+use tokio::sync::Semaphore;
+
+const DAY: i64 = 86_400_000;
+
+#[test]
+fn extensions_use_individual_expiry_and_keep_first_use_relative() {
+    let ms = |value: &str| {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .timestamp_millis()
+    };
+    let now = ms("2028-01-31T22:10:02.123Z");
+    let feb = ms("2028-02-29T22:10:02.123Z");
+    assert_eq!(Term::Months(1).extend(0, now).unwrap(), feb);
+    assert_eq!(Term::Months(1).extend(now - DAY, now).unwrap(), feb);
+    assert_eq!(
+        Term::Months(12).extend(feb, now).unwrap(),
+        ms("2029-02-28T22:10:02.123Z")
+    );
+    assert_eq!(
+        Term::Days(40_000).extend(feb, now).unwrap(),
+        feb + 40_000 * DAY
+    );
+    assert_eq!(Term::Days(3).extend(-2 * DAY, now).unwrap(), -5 * DAY);
+    assert_eq!(Term::Months(1).extend(-2 * DAY, now).unwrap(), -31 * DAY);
+    assert!(Term::Days(1).extend(i64::MIN, now).is_err());
+    assert!(Term::Days(i64::MAX).extend(now, now).is_err());
+    assert!(Term::Days(1).extend(8_640_000_000_000_000, now).is_err());
+}
+
+struct Fixture {
+    record: Value,
+    writes: usize,
+}
+type Remote = State<Arc<Mutex<Fixture>>>;
+
+async fn lookup(State(remote): Remote) -> Json<Value> {
+    Json(json!({"success":true,"obj":{"client":remote.lock().unwrap().record,"inboundIds":[5,7]}}))
+}
+
+async fn update(State(remote): Remote, Json(input): Json<Value>) -> Json<Value> {
+    let mut state = remote.lock().unwrap();
+    for field in ["email", "enable", "flow", "subId", "totalGB", "reverse"] {
+        assert_eq!(input[field], state.record[field], "{field}");
+    }
+    assert_eq!(input["id"], state.record["uuid"]);
+    assert_eq!(input["allowedIPs"], json!(["10.0.0.1/32", "::1/128"]));
+    assert_eq!(input["created_at"], 123);
+    assert!(input.get("inboundIds").is_none());
+    state.record["comment"] = input["comment"].clone();
+    state.record["expiryTime"] = input["expiryTime"].clone();
+    state.writes += 1;
+    state.record["updatedAt"] = json!(10 + state.writes);
+    // Simulate a remote commit followed by a lost acknowledgement on the first write.
+    if state.writes == 1 {
+        Json(json!({"success":false,"msg":"upstream temporarily unavailable"}))
+    } else {
+        Json(json!({"success":true,"obj":{"nodePending":false}}))
+    }
+}
+
+#[tokio::test]
+async fn native_edits_preserve_settings_and_retries_reconcile_an_ambiguous_write() {
+    let remote = Arc::new(Mutex::new(Fixture {
+        record: json!({"id":3,"email":"client-a","uuid":"stable-id","enable":false,
+            "expiryTime":0,"updatedAt":10,"createdAt":123,"comment":"原备注","totalGB":4096,
+            "flow":"xtls-rprx-vision","reverse":{"tag":"reverse"},"subId":"retained",
+            "allowedIPs":"10.0.0.1/32,::1/128"}),
+        writes: 0,
+    }));
+    let router = Router::new()
+        .route("/panel/api/clients/get/:email", get(lookup))
+        .route("/panel/api/clients/update/:email", post(update))
+        .with_state(remote.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let temp = tempfile::tempdir().unwrap();
+    let db = storage::open(temp.path()).await.unwrap();
+    let panel = storage::insert_panel(&db, "测试面板", &url, "", "test-only", "")
+        .await
+        .unwrap();
+    let app: Shared = Arc::new(App {
+        db,
+        client: reqwest::Client::new(),
+        locks: Default::default(),
+        traffic_lock: Default::default(),
+        upstream_slots: Semaphore::new(2),
+        backup_slot: Semaphore::new(1),
+    });
+    let selection = json!({"panelId":panel.id,"clientId":3,"email":"client-a","uuid":"stable-id","expiryTime":0,"updatedAt":10,"note":"原备注"});
+    let mut stale = selection.clone();
+    stale["clientId"] = json!(4);
+    let targets = json!([stale, selection]);
+    let extension = || Json(serde_json::from_value(json!({"targets":targets,"days":8})).unwrap());
+    let first = extend(State(app.clone()), extension())
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(first["results"][0]["clientId"], 4);
+    assert_eq!(first["results"][0]["ok"], false);
+    assert_eq!(first["results"][1]["ok"], false);
+    assert_eq!(first["results"][1]["conflict"], false);
+    let second = extend(State(app.clone()), extension())
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(second["results"][1]["ok"], true);
+    assert_eq!(
+        second["results"][1]["expiryTime"],
+        remote.lock().unwrap().record["expiryTime"]
+    );
+    assert_eq!(remote.lock().unwrap().writes, 1);
+    assert_eq!(remote.lock().unwrap().record["comment"], "原备注");
+    let saved_expiry = second["results"][1]["expiryTime"].clone();
+    let edit_note = |expected: &str, new: &str| {
+        let mut target = selection.clone();
+        target["note"] = json!(expected);
+        Json(serde_json::from_value(json!({"targets":[target],"note":new})).unwrap())
+    };
+    for _ in 0..2 {
+        let reply = notes(State(app.clone()), edit_note("原备注", "客户 🐉"))
+            .await
+            .unwrap_or_else(|e| panic!("{}", e.1))
+            .0;
+        assert_eq!(reply["results"][0]["note"], "客户 🐉");
+    }
+    let conflict = notes(State(app.clone()), edit_note("原备注", ""))
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(conflict["results"][0]["conflict"], true);
+    assert_eq!(remote.lock().unwrap().writes, 2);
+    let clear = notes(State(app.clone()), edit_note("客户 🐉", ""))
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(clear["results"][0]["note"], "");
+    assert_eq!(remote.lock().unwrap().record["expiryTime"], saved_expiry);
+    assert_eq!(remote.lock().unwrap().record["comment"], "");
+    // An external reset creates a fresh version, even when the expiry has returned to zero.
+    remote.lock().unwrap().record["expiryTime"] = json!(0);
+    let old = extend(State(app.clone()), extension())
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(old["results"][1]["ok"], false);
+    assert_eq!(old["results"][1]["conflict"], false);
+    let mut fresh = selection.clone();
+    fresh["updatedAt"] = remote.lock().unwrap().record["updatedAt"].clone();
+    let fresh = Json(serde_json::from_value(json!({"targets":[fresh],"days":8})).unwrap());
+    let renewed = extend(State(app.clone()), fresh)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(renewed["results"][0]["ok"], true);
+    assert_eq!(remote.lock().unwrap().writes, 4);
+    let mut stale = selection;
+    stale["updatedAt"] = json!(5);
+    let stale = Json(serde_json::from_value(json!({"targets":[stale],"months":2})).unwrap());
+    let rejected = extend(State(app.clone()), stale)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(rejected["results"][0]["conflict"], true);
+    assert_eq!(remote.lock().unwrap().writes, 4);
+    task.abort();
+    app.db.close().await;
+}

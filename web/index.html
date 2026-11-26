@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#6449db">
+  <title>Nexus · 面板管理台</title>
+  <link rel="icon" href="/brand.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/workflows.css">
+  <link rel="stylesheet" href="/lines.css">
+  <script defer src="/icons.js"></script>
+  <script defer src="/clients.js"></script>
+  <script defer src="/workflows.js"></script>
+  <script defer src="/lines.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="nx-shell">
+    <aside id="sidebar" class="nx-sidebar" aria-label="主导航">
+      <a class="nx-brand" href="#lines" aria-label="Nexus 线路管理"><img src="/brand.svg" alt="" width="37" height="40"><span>Nexus<small>线路管理台</small></span></a>
+      <nav id="primary-nav"></nav>
+      <div class="nx-sidebar-foot">
+        <div class="nx-version"><span class="nx-version-logo">3x</span><strong>3x-ui</strong><span class="nx-version-number">v3.4.2</span></div>
+        <div class="nx-account"><span class="nx-avatar">N</span><div><strong>管理工作区</strong><small>Administrator</small></div></div>
+      </div>
+    </aside>
+    <button id="mobile-mask" class="nx-mask" aria-label="关闭导航" hidden></button>
+    <div class="nx-workspace">
+      <header class="nx-topbar">
+        <div class="nx-crumb"><button class="nx-mobile-menu nx-iconbutton" id="mobile-menu" aria-label="打开导航" aria-expanded="false"></button><span class="nx-desktop-crumb-icon" id="crumb-icon"></span><span class="nx-crumb-root">工作空间</span><span class="nx-slash">/</span><strong id="crumb-page">总览</strong></div>
+        <div class="nx-top-actions"><span class="nx-sync" id="sync-label"></span><span class="nx-top-divider"></span><div class="nx-mode-wrap"><button id="mode-toggle" class="nx-mode-toggle" aria-haspopup="true" aria-expanded="false"></button><div id="mode-menu" class="nx-mode-menu" hidden></div></div></div>
+      </header>
+      <main id="main-content" tabindex="-1"></main>
+    </div>
+  </div>
+  <div id="nx-toast-stack" aria-live="polite"></div>
+</body>
+</html>

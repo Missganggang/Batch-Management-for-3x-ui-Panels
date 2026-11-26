@@ -124,6 +124,16 @@ pub async fn open(dir: &Path) -> Result<SqlitePool> {
             .execute(&mut *tx)
             .await?;
     }
+    let has_panel_notes: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('panels') WHERE name='note')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !has_panel_notes {
+        sqlx::query("ALTER TABLE panels ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(db)
 }
@@ -132,6 +142,7 @@ pub async fn open(dir: &Path) -> Result<SqlitePool> {
 pub struct Panel {
     pub id: String,
     pub name: String,
+    pub note: String,
     pub url: String,
     pub region: String,
     #[serde(rename = "publicHost")]
@@ -157,6 +168,7 @@ pub async fn panels(db: &SqlitePool) -> Result<Vec<Panel>> {
         .map(|r| Panel {
             id: r.get("id"),
             name: r.get("name"),
+            note: r.get("note"),
             url: r.get("url"),
             region: r.get("region"),
             public_host: r.get("public_host"),
@@ -172,33 +184,38 @@ pub async fn insert_panel(
     region: &str,
     token: &str,
     public_host: &str,
+    note: &str,
 ) -> Result<Panel> {
     let p = Panel {
         id: Uuid::new_v4().to_string(),
         name: name.into(),
+        note: note.into(),
         url: url.into(),
         region: region.into(),
         public_host: public_host.into(),
         secret: protect(token.as_bytes(), true)?,
     };
-    sqlx::query("INSERT INTO panels(id,name,url,region,token,public_host) VALUES(?,?,?,?,?,?)")
-        .bind(&p.id)
-        .bind(&p.name)
-        .bind(&p.url)
-        .bind(&p.region)
-        .bind(&p.secret)
-        .bind(&p.public_host)
-        .execute(db)
-        .await
-        .map_err(|e| {
-            if e.as_database_error()
-                .is_some_and(|d| d.is_unique_violation())
-            {
-                anyhow!("此面板地址已接入")
-            } else {
-                anyhow!(e)
-            }
-        })?;
+    sqlx::query(
+        "INSERT INTO panels(id,name,url,region,token,public_host,note) VALUES(?,?,?,?,?,?,?)",
+    )
+    .bind(&p.id)
+    .bind(&p.name)
+    .bind(&p.url)
+    .bind(&p.region)
+    .bind(&p.secret)
+    .bind(&p.public_host)
+    .bind(&p.note)
+    .execute(db)
+    .await
+    .map_err(|e| {
+        if e.as_database_error()
+            .is_some_and(|d| d.is_unique_violation())
+        {
+            anyhow!("此面板地址已接入")
+        } else {
+            anyhow!(e)
+        }
+    })?;
     Ok(p)
 }
 

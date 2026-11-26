@@ -167,6 +167,31 @@ impl PanelApi {
         Ok(())
     }
 
+    pub async fn set_client_enabled(&self, email: &str, enable: bool) -> Result<()> {
+        let path = if enable {
+            "clients/bulkEnable"
+        } else {
+            "clients/bulkDisable"
+        };
+        let reply = self
+            .obj(
+                self.request(Method::POST, path)
+                    .json(&json!({"emails":[email]})),
+            )
+            .await?;
+        if let Some(reason) = reply["skipped"].as_array().and_then(|items| items.first()) {
+            anyhow::bail!(
+                "面板跳过了此客户端：{}",
+                reason["reason"].as_str().unwrap_or("原因未知")
+            );
+        }
+        ensure!(
+            reply["changed"].as_u64() == Some(1),
+            "面板未确认修改客户端状态"
+        );
+        Ok(())
+    }
+
     pub async fn save_client_record(
         &self,
         record: Value,

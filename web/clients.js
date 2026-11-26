@@ -86,6 +86,7 @@
       <div data-list class="wf-table-wrap"><div class="wf-loading">正在读取客户端…</div></div><div data-pagination></div></section>`;
     host.replaceChildren(root);
     const rows = [], selected = new Map(), chosen = new Map(), pending = [], warnings = [];
+    const savingStatus = new Set();
     let page = 0;
     const table = root.querySelector('[data-list]'), batch = root.querySelector('[data-delete-selected]');
     const label = i => i.remark || i.tag || `入站 #${i.id}`;
@@ -107,6 +108,12 @@
       }).join('')}</select>` : '';
       return `<div class="wf-client-share">${select}<div class="wf-panel-actions"><button class="wf-link" data-copy-link>复制链接</button><button class="wf-link" data-show-qr>二维码</button><button class="wf-link" data-row-export>导出</button></div></div>`;
     }
+    function statusControl(row) {
+      const enabled = row.client.enable;
+      if (typeof enabled !== 'boolean') return '<span class="wf-meta">状态未知</span>';
+      const busy = savingStatus.has(targetKey(row.target));
+      return `<button type="button" class="wf-client-switch" data-row-status role="switch" aria-label="启用客户端 ${esc(row.client.email)}" aria-checked="${enabled}" ${busy?'disabled aria-busy="true"':''}><span aria-hidden="true"></span>${busy?'保存中':enabled?'已启用':'已停用'}</button>`;
+    }
     function draw() {
       if (!root.isConnected) return;
       const query=root.querySelector('[type=search]').value.trim().toLowerCase(), panel=root.querySelector('[data-filter]').value;
@@ -123,10 +130,11 @@
       root.querySelector('[data-reset-selected]').disabled=!selected.size;
       batch.textContent=selected.size?`删除选中（${selected.size}）`:'删除选中';
       root.querySelector('[data-count]').textContent=String(filtered.length);
-      table.innerHTML=shown.length?`<table class="wf-table"><thead><tr><th><input aria-label="选择本页客户端" data-select-page type="checkbox"></th><th>客户端 / 所属面板</th><th>关联入站</th><th>到期时间</th><th>已用 / 流量上限</th><th>分享</th><th>操作</th><th>备注</th></tr></thead><tbody>${shown.map(({row,index})=>{
+      table.innerHTML=shown.length?`<table class="wf-table"><thead><tr><th><input aria-label="选择本页客户端" data-select-page type="checkbox"></th><th>客户端 / 所属面板</th><th>状态</th><th>关联入站</th><th>到期时间</th><th>已用 / 流量上限</th><th>分享</th><th>操作</th><th>备注</th></tr></thead><tbody>${shown.map(({row,index})=>{
         const {client,bindings}=row;
         return `<tr data-row="${index}"><td><input data-select-client type="checkbox" aria-label="选择 ${esc(client.email)}" ${selected.has(targetKey(row.target))?'checked':''}></td>
-          <td><strong>${esc(client.email)}</strong><small class="wf-meta">${esc(row.panel.name)} · ${client.enable===false?'停用':'启用'}</small></td>
+          <td><strong>${esc(client.email)}</strong><small class="wf-meta">${esc(row.panel.name)}</small></td>
+          <td data-status-cell>${statusControl(row)}</td>
           <td class="wf-binding-list">${bindings.map(i=>`<span>${esc(label(i))} · #${esc(i.id)}</span>`).join('')||'未绑定'}</td>
           <td>${esc(day(client.expiryTime))}</td><td><div class="wf-traffic-cell"><span>${esc(usageText(client))} / ${esc(quotaText(client))}</span><div class="wf-panel-actions"><button class="wf-link" data-row-quota>改上限</button><button class="wf-link" data-row-reset>重置流量</button></div></div></td><td>${shareControls(row)}</td>
           <td><div class="wf-panel-actions"><button class="wf-link" data-row-extend>增加时间</button>${bindings.length?'<button class="wf-link" data-row-expiry>改期</button>':''}<button class="wf-link wf-danger-link" data-remove-client>删除</button></div></td>
@@ -236,6 +244,10 @@
           .find(c => c.id === target.clientId && c.email === target.email);
         const result = {...target, name:panel.name, ok:false};
         if (!client) return {...result, message:'客户端已移除'};
+        if (action === 'status') {
+          client.enable = change.enable;
+          return {...result, ok:true, enable:client.enable, message:client.enable?'客户端已启用':'客户端已停用'};
+        }
         if (action === 'quota') {
           client.totalGB = change.quotaBytes;
           return {...result, ok:true, quotaBytes:change.quotaBytes, message:'已更新客户端流量上限'};
@@ -258,6 +270,40 @@
         client.expiryTime = expiryTime;
         return {...result, ok:true, expiryTime:client.expiryTime, message:`新的有效期为 ${day(client.expiryTime)}`};
       });
+    }
+    async function changeStatus(row, index) {
+      const key = targetKey(row.target);
+      if (savingStatus.has(key) || typeof row.client.enable !== 'boolean') return;
+      const enable = !row.client.enable;
+      const cell = () => table.querySelector(`[data-row="${index}"] [data-status-cell]`);
+      const button = cell()?.querySelector('button');
+      const hadFocus = button && document.activeElement === button;
+      savingStatus.add(key);
+      if (cell()) cell().innerHTML = statusControl(row);
+      try {
+        const [result] = await editClients('status', [row.target], {enable});
+        if (!result?.ok || result.enable !== enable) throw new Error(result?.message || '面板未确认客户端状态');
+        row.client.enable = result.enable;
+        if (Number.isSafeInteger(result.updatedAt)) row.client.updatedAt = result.updatedAt;
+        ctx.toast(result.message);
+      } catch (err) {
+        row.client.enable = null;
+        ctx.toast(err.message, 'error');
+        try {
+          const fresh = await panelClients(ctx, wf, row.panel);
+          const current = fresh.rows.find(r => targetKey(r.target) === key);
+          if (current) Object.assign(row, current);
+        } catch {
+          ctx.toast('无法确认客户端当前状态，请刷新列表', 'error');
+        }
+      } finally {
+        savingStatus.delete(key);
+        const slot = cell();
+        if (slot) {
+          slot.innerHTML = statusControl(row);
+          if (hadFocus && document.activeElement === document.body) slot.querySelector('button')?.focus({preventScroll:true});
+        }
+      }
     }
     function trafficDialog(action, entries) {
       if (!entries.length) return;
@@ -445,6 +491,7 @@
     table.onclick=async e=>{
       const btn=e.target.closest('button'),tr=btn?.closest('[data-row]');if(!tr)return;
       const row=rows[Number(tr.dataset.row)], item=selectedLink(row);
+      if(btn.matches('[data-row-status]'))return changeStatus(row, Number(tr.dataset.row));
       if(btn.matches('[data-row-note]'))return editDialog('notes',[row]);
       if(btn.matches('[data-row-extend]'))return editDialog('extend',[row]);
       if(btn.matches('[data-row-quota]'))return trafficDialog('quota',[row]);

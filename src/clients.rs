@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 mod edit;
 mod export;
 mod qr_png;
-pub use edit::{extend, notes, quota};
+pub use edit::{extend, notes, quota, status};
 pub use export::export;
 
 pub async fn links(
@@ -149,6 +149,7 @@ enum Operation {
     Delete,
     Extend(edit::Term),
     Notes(String),
+    Status(bool),
     Quota(i64),
     ResetTraffic,
 }
@@ -222,6 +223,9 @@ async fn run_batch(app: Shared, targets: Vec<Target>, operation: Operation) -> R
                                 Operation::Notes(note) => {
                                     edit::note_target(&target, api, note).await
                                 }
+                                Operation::Status(enable) => {
+                                    edit::status_target(&target, api, *enable).await
+                                }
                                 Operation::Quota(bytes) => {
                                     edit::quota_target(&app.db, &target, api, *bytes).await
                                 }
@@ -265,6 +269,7 @@ async fn run_batch(app: Shared, targets: Vec<Target>, operation: Operation) -> R
         Operation::Delete => "client.delete",
         Operation::Extend(_) => "client.extend",
         Operation::Notes(_) => "client.notes",
+        Operation::Status(_) => "client.status",
         Operation::Quota(_) => "client.quota",
         Operation::ResetTraffic => "client.resetTraffic",
     };

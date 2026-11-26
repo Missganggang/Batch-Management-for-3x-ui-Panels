@@ -79,7 +79,7 @@ async fn mock_panel(
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let temp = tempfile::tempdir().unwrap();
     let db = storage::open(temp.path()).await.unwrap();
-    let panel = storage::insert_panel(&db, "测试面板", &url, "", "test-only", "")
+    let panel = storage::insert_panel(&db, "测试面板", &url, "", "test-only", "", "")
         .await
         .unwrap();
     let app = Arc::new(App {
@@ -183,6 +183,68 @@ async fn native_edits_preserve_settings_and_retries_reconcile_an_ambiguous_write
         .0;
     assert_eq!(rejected["results"][0]["conflict"], true);
     assert_eq!(remote.lock().unwrap().writes, 4);
+    task.abort();
+    app.db.close().await;
+}
+
+#[tokio::test]
+async fn native_switch_verifies_identity_result_and_readback() {
+    type Mock = State<Arc<Mutex<Value>>>;
+    let remote = Arc::new(Mutex::new(json!({
+        "client":{"id":3,"uuid":"stable-id","email":"client-a","expiryTime":89012,"enable":true,"updatedAt":123},
+        "mode":"apply","writes":0
+    })));
+    let router = Router::new()
+        .route("/panel/api/clients/get/client-a", get(|s: Mock| async move {
+            Json(json!({"success":true,"obj":{"client":s.lock().unwrap()["client"]}}))
+        }))
+        .route("/panel/api/clients/:action", post(|s: Mock, axum::extract::Path(action): axum::extract::Path<String>, Json(body): Json<Value>| async move {
+            assert_eq!(body, json!({"emails":["client-a"]}));
+            let enable = match action.as_str() {
+                "bulkEnable" => true,
+                "bulkDisable" => false,
+                action => panic!("unexpected action: {action}"),
+            };
+            let mut state = s.lock().unwrap();
+            state["writes"] = json!(state["writes"].as_u64().unwrap() + 1);
+            if state["mode"] == "skip" {
+                return Json(json!({"success":true,"obj":{"changed":0,"skipped":[{"email":"client-a","reason":"rejected"}]}}));
+            }
+            if state["mode"] == "apply" {
+                state["client"]["enable"] = json!(enable);
+            }
+            Json(json!({"success":true,"obj":{"changed":1}}))
+        }))
+        .with_state(remote.clone());
+    let (_temp, app, panel_id, task) = mock_panel(router).await;
+    let change = |uuid: &str, enable| {
+        Json(serde_json::from_value(json!({"targets":[{"panelId":panel_id,"clientId":3,"email":"client-a","uuid":uuid}],"enable":enable})).unwrap())
+    };
+    let switch = |uuid: &str, enable| status(State(app.clone()), change(uuid, enable));
+    let result = switch("replaced", false)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1))
+        .0;
+    assert_eq!(result["results"][0]["ok"], false);
+    assert_eq!(remote.lock().unwrap()["writes"], 0);
+    for enable in [false, false, true] {
+        let result = switch("stable-id", enable)
+            .await
+            .unwrap_or_else(|e| panic!("{}", e.1))
+            .0;
+        assert_eq!(result["results"][0]["ok"], true);
+        assert_eq!(result["results"][0]["enable"], enable);
+    }
+    assert_eq!(remote.lock().unwrap()["writes"], 2);
+    for mode in ["skip", "ignore"] {
+        remote.lock().unwrap()["mode"] = json!(mode);
+        let result = switch("stable-id", false)
+            .await
+            .unwrap_or_else(|e| panic!("{}", e.1))
+            .0;
+        assert_eq!(result["results"][0]["ok"], false);
+        assert_eq!(remote.lock().unwrap()["client"]["enable"], true);
+    }
     task.abort();
     app.db.close().await;
 }

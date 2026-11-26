@@ -490,8 +490,14 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
             let _slot = app.upstream_slots.acquire().await.expect("open semaphore");
             let data = match p.api(&app.client) {
                 Ok(api) => {
-                    let (clients, online) = tokio::join!(api.clients(), api.online_clients());
-                    Ok((clients, online))
+                    let (clients, online, inbounds) =
+                        tokio::join!(api.clients(), api.online_clients(), api.inbounds());
+                    let inbound_states = inbounds.map(|rows| {
+                        rows.iter()
+                            .filter_map(|row| Some((row["id"].as_i64()?, row["enable"].as_bool()?)))
+                            .collect::<HashMap<_, _>>()
+                    });
+                    Ok((clients, online, inbound_states))
                 }
                 Err(e) => Err(e),
             };
@@ -504,7 +510,7 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
     for (pid, data) in stats {
         let mut error =
             |e: anyhow::Error| errors.push(json!({"panelId":pid,"message":format!("{e:#}")}));
-        let (clients, online) = match data {
+        let (clients, online, inbound_states) = match data {
             Ok(v) => v,
             Err(e) => {
                 error(e);
@@ -529,6 +535,10 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
             .iter()
             .filter_map(|c| Some(((c["uuid"].as_str()?, c["email"].as_str()?), c)))
             .collect();
+        let inbound_states = inbound_states.unwrap_or_else(|err| {
+            error(err.context("读取入站启用状态失败"));
+            HashMap::new()
+        });
         for &i in &indexes[&pid] {
             let row = &rows[i];
             let dst = &mut output[i];
@@ -540,6 +550,12 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
                     .as_array()
                     .is_some_and(|ids| ids.contains(&json!(inbound_id)))
             }) {
+                let inbound_enabled = inbound_id.and_then(|id| inbound_states.get(&id).copied());
+                match (client["enable"].as_bool(), inbound_enabled) {
+                    (Some(false), _) | (_, Some(false)) => dst["enabled"] = json!(false),
+                    (Some(true), Some(true)) => dst["enabled"] = json!(true),
+                    _ => {}
+                }
                 dst["online"] = json!(online.as_ref().map(|o| o.contains(&name)));
                 dst["up"] = client["traffic"]["up"].clone();
                 dst["down"] = client["traffic"]["down"].clone();

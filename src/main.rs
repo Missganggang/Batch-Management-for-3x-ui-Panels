@@ -111,6 +111,7 @@ async fn main() -> Result<()> {
             delete(remove_panel).layer(Extension(access.clone())),
         )
         .route("/api/panels/:id/sync", post(sync_panel))
+        .route("/api/panels/:id/note", post(update_panel_note))
         .route(
             "/api/panels/:id/repair-user-routes",
             post(lines::repair_user_routes),
@@ -125,6 +126,7 @@ async fn main() -> Result<()> {
         .route("/api/clients/export-xlsx", post(clients::export))
         .route("/api/clients/extend", post(clients::extend))
         .route("/api/clients/notes", post(clients::notes))
+        .route("/api/clients/status", post(clients::status))
         .route("/api/clients/quota", post(clients::quota))
         .route("/api/clients/reset-traffic", post(clients::reset_traffic))
         .route("/api/clients/deletions", get(clients::pending))
@@ -197,6 +199,8 @@ struct AddPanel {
     #[serde(default, rename = "publicHost")]
     public_host: String,
     #[serde(default)]
+    note: String,
+    #[serde(default)]
     sync: bool,
 }
 async fn add_panel(
@@ -205,6 +209,7 @@ async fn add_panel(
 ) -> ApiResult<impl IntoResponse> {
     let (name, region, token) = (p.name.trim(), p.region.trim(), p.token.trim());
     let public_host = lines::public_host(&p.public_host)?;
+    let note = panel_note(&p.note)?;
     if name.is_empty()
         || name.chars().count() > 80
         || region.chars().count() > 80
@@ -226,7 +231,7 @@ async fn add_panel(
         let _slot = app.upstream_slots.acquire().await.expect("open semaphore");
         api.inbounds().await.map_err(ApiError::upstream)?;
     }
-    let panel = storage::insert_panel(&app.db, name, url, region, token, &public_host)
+    let panel = storage::insert_panel(&app.db, name, url, region, token, &public_host, note)
         .await
         .map_err(|e| ApiError::bad(e.to_string()))?;
     let mut result = json!({"panel":panel});
@@ -241,6 +246,46 @@ async fn add_panel(
 async fn sync_panel(State(app): State<Shared>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(sync::run(&app, &id).await?))
 }
+
+fn panel_note(value: &str) -> ApiResult<&str> {
+    let note = value.trim();
+    if note.chars().count() > 2048 {
+        return Err(ApiError::bad("面板备注最多可填写 2048 个字符"));
+    }
+    Ok(note)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PanelNote {
+    note: String,
+    expected_note: String,
+}
+
+async fn update_panel_note(
+    State(app): State<Shared>,
+    Path(id): Path<String>,
+    Json(input): Json<PanelNote>,
+) -> ApiResult<Json<Value>> {
+    let note = panel_note(&input.note)?;
+    let update = sqlx::query("UPDATE panels SET note=? WHERE id=? AND note IN (?,?)")
+        .bind(note)
+        .bind(&id)
+        .bind(&input.expected_note)
+        .bind(note)
+        .execute(&app.db)
+        .await
+        .context("保存面板备注失败")?;
+    if update.rows_affected() == 0 {
+        app.panel(&id).await?;
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "面板备注已变更，请刷新后再编辑".into(),
+        ));
+    }
+    Ok(Json(json!({"note":note})))
+}
+
 #[derive(Deserialize)]
 struct DeletePanel {
     #[serde(default)]

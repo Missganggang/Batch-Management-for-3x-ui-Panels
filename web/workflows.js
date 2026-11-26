@@ -114,8 +114,29 @@
       finally{btn.disabled=false;btn.textContent=original;delete el.dataset.busy;form.inert=false;}
     });
   }
+  function panelNoteField(note='') {
+    return field('面板备注（可选）',`<textarea name="note" maxlength="2048" rows="3" placeholder="填写面板备注">${esc(note)}</textarea>`);
+  }
+  function editPanelNote(ctx,panel,draw) {
+    const expectedNote=panel.note || '';
+    const body=`<form id="wf-form" class="wf-form"><strong>${esc(panel.name)}</strong>${panelNoteField(expectedNote)}<div class="wf-inline-error" role="alert"></div></form>`;
+    const el=modal(ctx,'编辑面板备注','pencil',body,submitFooter('保存备注'));
+    bindForm(el,async form=>{
+      const note=form.elements.note.value.trim();
+      if(ctx.state.demo) panel.note=note;
+      else {
+        const saved=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/note`,{method:'POST',body:{note,expectedNote}});
+        panel.note=saved.note;
+      }
+      const current=ctx.state.panels.find(p=>p.id===panel.id);
+      if(current) current.note=panel.note;
+      el.close();
+      draw();
+      ctx.toast('面板备注已保存');
+    });
+  }
   function addPanel(ctx) {
-    const body=`<form id="wf-form" class="wf-form"><div class="wf-grid">${field('面板名称',input('name','例如 香港主面板','','maxlength="80" autocomplete="off"'),'留空时使用面板域名。')}${field('地区（可选）',input('region','例如 香港','','maxlength="80"'))}</div>${field('面板地址',input('url','https://panel.example.com/自定义路径/','','type="url" required autocomplete="off" spellcheck="false"'),'填写含自定义路径的面板根地址。')}${field('分享地址（可选）',input('publicHost','公网域名或 IP','','autocomplete="off" spellcheck="false"'),'当客户端连接地址与面板域名不同时填写。')}${field('API 令牌',input('token','输入 3x-ui API 令牌','','type="password" required autocomplete="new-password" spellcheck="false"'))}<label class="wf-check"><input type="checkbox" name="sync" checked>接入后同步已有数据</label>${ctx.state.demo?'<div class="wf-note">接入成功后将切换至实际工作区。</div>':''}<div class="wf-inline-error" role="alert"></div></form>`;
+    const body=`<form id="wf-form" class="wf-form"><div class="wf-grid">${field('面板名称',input('name','例如 香港主面板','','maxlength="80" autocomplete="off"'),'留空时使用面板域名。')}${field('地区（可选）',input('region','例如 香港','','maxlength="80"'))}</div>${field('面板地址',input('url','https://panel.example.com/自定义路径/','','type="url" required autocomplete="off" spellcheck="false"'),'填写含自定义路径的面板根地址。')}${field('分享地址（可选）',input('publicHost','公网域名或 IP','','autocomplete="off" spellcheck="false"'),'当客户端连接地址与面板域名不同时填写。')}${panelNoteField()}${field('API 令牌',input('token','输入 3x-ui API 令牌','','type="password" required autocomplete="new-password" spellcheck="false"'))}<label class="wf-check"><input type="checkbox" name="sync" checked>接入后同步已有数据</label>${ctx.state.demo?'<div class="wf-note">接入成功后将切换至实际工作区。</div>':''}<div class="wf-inline-error" role="alert"></div></form>`;
     const el=modal(ctx,'接入面板','server',body,submitFooter('测试并接入'));
     bindForm(el,async form=>{
       const fields=Object.fromEntries(new FormData(form));
@@ -133,7 +154,7 @@
   }
   function detail(ctx,panel) {
     if(!panel) return ctx.toast('找不到该面板');
-    const pairs=[['面板名称',panel.name],['面板地址',panel.url||'—'],['地区',panel.region||'—'],['连接状态',panel.online===true?'在线':panel.online===false?'离线':'待同步'],['入站数量',panel.inbounds??'—'],['客户端数量',panel.clients??'—']];
+    const pairs=[['面板名称',panel.name],['面板备注',panel.note||'—'],['面板地址',panel.url||'—'],['地区',panel.region||'—'],['连接状态',panel.online===true?'在线':panel.online===false?'离线':'待同步'],['入站数量',panel.inbounds??'—'],['客户端数量',panel.clients??'—']];
     const body=`<dl class="wf-detail-list">${pairs.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`;
     const el=modal(ctx,panel.name,'server',body,`<button type="button" class="wf-button wf-danger-link" data-remove>删除面板</button><button type="button" class="wf-button" data-panel-sync>同步</button><button type="button" class="wf-button wf-primary" data-backup>${ctx.icon('download')}备份面板</button>`);
     el.querySelector('[data-backup]').onclick=()=>backup(ctx,panel.id,true);
@@ -637,7 +658,7 @@
     });
   }
   const headings={
-    panels:['面板名称','面板入口','地区','连接状态','入站','客户端','操作'],
+    panels:['面板名称','备注','面板入口','地区','连接状态','入站','客户端','操作'],
     backups:['面板名称','地区','连接状态','操作'],
     inbounds:['入站名称','所属面板','协议','到期时间','状态','操作'],
     outbounds:['出站标签','规则中的用户','入站标签匹配','所属面板','协议','延迟','操作'],
@@ -676,7 +697,9 @@
   function rowCells(ctx,page,row,index) {
     const {panel:p,inbound:i,client:c,outbound:o,rule:r,event:h}=row;
     const online=()=>p.online===true?badge('在线','good'):p.online===false?badge('离线','fail'):badge('待同步','neutral');
-    if(page==='panels')return [entity(ctx,'server',p.name,p.url),panelAccess(ctx,p),esc(p.region||'—'),online(),esc(p.inbounds??'—'),esc(p.clients??'—'),'<div class="wf-panel-actions">'+refLink('panel-detail',index,'详情')+refLink('panel-sync',index,'同步')+refLink('panel-remove',index,'删除')+'</div>'];
+    if(page==='panels')return [entity(ctx,'server',p.name,p.url),
+      `<button type="button" class="wf-note-editor" data-wf-row="panel-note" data-wf-index="${index}" title="${esc(p.note||'添加备注')}" aria-label="编辑 ${esc(p.name)} 的面板备注"><span>${esc(p.note||'添加备注')}</span>${ctx.icon('pencil',14)}</button>`,
+      panelAccess(ctx,p),esc(p.region||'—'),online(),esc(p.inbounds??'—'),esc(p.clients??'—'),'<div class="wf-panel-actions">'+refLink('panel-detail',index,'详情')+refLink('panel-sync',index,'同步')+refLink('panel-remove',index,'删除')+'</div>'];
     if(page==='backups')return [entity(ctx,'database',p.name,p.url),esc(p.region||'—'),online(),refLink('download-one',index,'下载备份')];
     if(page==='inbounds')return [entity(ctx,'log-in',i.remark||'未命名入站',`:${i.port} · #${i.id}`),esc(p.name),badge(String(i.protocol||'—').toUpperCase()),esc(date(i.expiryTime||0)),badge(i.enable===false?'停用':'启用',i.enable===false?'neutral':'good'),refLink('inbound.expiry',index,'修改有效期')];
     if(page==='outbounds')return [entity(ctx,'log-out',o.tag||'未命名出站'),esc(row.users.join('、')||'—'),esc(row.inboundTags.join('、')||'—'),esc(p.name),badge(o.protocol||'—'),
@@ -696,6 +719,7 @@
     switch(page){
       case 'activity':fields=[labels[h.action]||h.action,...list(h.results).map(x=>x.name)];break;
       case 'routes':fields=[p.name,ruleSelector(r),r.outboundTag,r.balancerTag,r.ruleTag,...identifiers(r.user),...identifiers(r.inboundTag)];break;
+      case 'panels':fields=[p.name,p.region,p.url,p.note];break;
       case 'inbounds':fields=[p.name,i.remark,i.port,i.protocol,i.id];break;
       case 'outbounds':fields=[p.name,o.tag,o.protocol,...row.users,...row.inboundTags];break;
       default:fields=[p.name,p.region,p.url];
@@ -749,6 +773,7 @@
       if(!btn)return;
       const row=rows[Number(btn.dataset.wfIndex)],a=btn.dataset.wfRow;
       if(!row)return;
+      if(a==='panel-note')return editPanelNote(ctx,row.panel,draw);
       if(a==='outbound.test')return tests.single(row);
       if(a==='item-history')return operationResults(ctx,labels[row.event.action]||row.event.action,list(row.event.results));
       open(a,ctx,{...row,panelId:row.panel.id});

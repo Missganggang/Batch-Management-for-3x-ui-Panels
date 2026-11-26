@@ -201,7 +201,11 @@
       form.elements.socks5.type=show?'text':'password';
       e.currentTarget.innerHTML=icon(show?'eye-off':'eye',16);e.currentTarget.setAttribute('aria-label',show?'隐藏 SOCKS5':'显示 SOCKS5');
     };
-    panelChoice.onchange=()=>remember(panelChoice.value);
+    panelChoice.onchange=()=>{
+      remember(panelChoice.value);
+      model.listPage=1;
+      drawLines(model);
+    };
     form.onsubmit=async e=>{
       e.preventDefault();if(model.creating)return;
       if(!panelChoice.value){addPanel();return;}
@@ -216,7 +220,7 @@
       output.textContent='';model.creating=true;btn.disabled=true;btn.textContent='正在创建…';form.inert=true;
       try{
         const {line}=await ctx.api('/api/lines',{method:'POST',body});
-        remember(body.panelId);form.elements.socks5.value='';form.elements.name.value='';
+        model.listPage=1;form.elements.socks5.value='';form.elements.name.value='';
         form.querySelectorAll('input[name=months]').forEach(choice=>choice.checked=false);
         form.elements.exactExpiry.value='';form.elements.quotaGB.value='';
         form.elements.quotaGB.dispatchEvent(new Event('input'));
@@ -241,11 +245,16 @@
   }
   function updatePanels(model) {
     const form=model.root.querySelector('form'),select=form.elements.panelId;
-    const selected=lastPanel() || select.value;
+    const previous=select.disabled?'':select.value;
+    const selected=previous || lastPanel();
     select.replaceChildren();
     model.panels.forEach(p=>select.add(new Option(p.name,p.id)));
     if(!model.panels.length)select.add(new Option('请先接入面板',''));
     if(model.panels.some(p=>String(p.id)===selected))select.value=selected;
+    if(previous!==select.value) {
+      model.listPage=1;
+      remember(select.value);
+    }
     select.disabled=!model.panels.length;
     form.querySelector('[data-host]').hidden=!model.panels.length;
     form.querySelector('.ln-panel-support').classList.toggle('ln-needs-panel',!model.panels.length);
@@ -254,8 +263,11 @@
   }
   function drawLines(model) {
     const {root,ctx,lines}=model,esc=ctx.esc;
+    const select=root.querySelector('[name=panelId]');
+    const panelId=select.disabled?'':select.value;
     const term=root.querySelector('[type=search]').value.trim().toLowerCase();
-    const list=lines.filter(l=>(l.name+' '+l.panelName).toLowerCase().includes(term));
+    const panelLines=lines.filter(l=>String(l.panelId)===panelId);
+    const list=panelLines.filter(l=>(l.name+' '+l.panelName).toLowerCase().includes(term));
     const pages = Math.max(1, Math.ceil(list.length / linesPerPage));
     model.listPage = Math.min(Math.max(1, model.listPage), pages);
     const start = (model.listPage - 1) * linesPerPage;
@@ -267,7 +279,7 @@
     pager.querySelector('[data-line-prev]').disabled = model.listPage === 1;
     pager.querySelector('[data-line-next]').disabled = model.listPage === pages;
     const empty=root.querySelector('.ln-empty'),table=root.querySelector('.ln-table-wrap');
-    root.querySelector('[data-total]').textContent=String(lines.length);
+    root.querySelector('[data-total]').textContent=String(panelLines.length);
     empty.hidden=!!list.length;table.hidden=!list.length;
     empty.innerHTML=icon('route',24)+'<strong>'+(model.ready?(term?'没有匹配的线路':'暂无线路'):'无法读取线路')+'</strong><span>'+(model.ready?(term?'试试其他名称或面板。':'创建第一条线路后，可在这里查看流量和分享二维码。'):'点击刷新以重新连接。')+'</span>';
     const act=(l,op,title)=>'<button data-op="'+op+'" data-line="'+esc(l.id)+'">'+title+'</button>';
@@ -410,7 +422,10 @@
         socks.value=failed.map(item=>item.socks5).join('\n');
         panel.disabled=true;
         if(!failed.length)form.querySelectorAll('.ln-limit-field').forEach(field=>field.disabled=true);
-        clients.hidden=!success;submitted=true;remember(panel.value);
+        clients.hidden=!success;submitted=true;
+        const mainPanel=root.querySelector('[name=panelId]');
+        mainPanel.value=panel.value;
+        mainPanel.dispatchEvent(new Event('change'));
         if(failed.length){
           form.querySelector('[data-paste-help]').textContent='已保留失败的线路和出口。修改后可再次提交。';
         }else{

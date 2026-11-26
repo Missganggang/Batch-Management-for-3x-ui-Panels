@@ -97,6 +97,22 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
         .json()
         .await?;
     let id = result["panel"]["id"].as_str().context("panel id")?;
+    assert_eq!(result["panel"]["note"], "");
+    let note_url = format!("{base}/api/panels/{id}/note");
+    for (expected, note, status) in [
+        ("", "香港面板", StatusCode::OK),
+        ("", "香港面板", StatusCode::OK),
+        ("", "另一备注", StatusCode::CONFLICT),
+    ] {
+        assert_eq!(
+            http.post(&note_url)
+                .json(&json!({"expectedNote":expected, "note":note}))
+                .send()
+                .await?
+                .status(),
+            status
+        );
+    }
     let empty_links: Value = http
         .get(format!("{base}/api/panels/{id}/client-links"))
         .send()
@@ -130,6 +146,20 @@ async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() 
         .await?;
     assert_eq!(overview["panels"][0]["online"], true);
     assert_eq!(overview["panels"][0]["up"], 200);
+    assert_eq!(overview["panels"][0]["note"], "香港面板");
+    http.post(&note_url)
+        .json(&json!({"expectedNote":"香港面板","note":""}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let panels: Value = http
+        .get(format!("{base}/api/panels"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(panels["panels"][0]["note"], "");
     assert_eq!(
         http.get(format!("{base}/api/panels"))
             .header("origin", "https://foreign.example")

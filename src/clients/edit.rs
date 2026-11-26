@@ -100,6 +100,19 @@ pub async fn notes(State(app): State<Shared>, Json(input): Json<Note>) -> ApiRes
 }
 
 #[derive(Deserialize)]
+pub struct Status {
+    targets: Vec<Target>,
+    enable: bool,
+}
+
+pub async fn status(
+    State(app): State<Shared>,
+    Json(input): Json<Status>,
+) -> ApiResult<Json<Value>> {
+    execute(app, input.targets, Operation::Status(input.enable)).await
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Quota {
     targets: Vec<Target>,
@@ -180,6 +193,25 @@ pub(super) async fn reset_target(target: &Target, api: &PanelApi) -> Result<Valu
         .await
         .context("请刷新列表核对当前流量后再决定是否重新清零")?;
     Ok(json!({"message":"已重置客户端的已用流量"}))
+}
+
+pub(super) async fn status_target(target: &Target, api: &PanelApi, enable: bool) -> Result<Value> {
+    let (mut client, _) = record(api, target).await?;
+    let current = client["enable"].as_bool().context("面板未返回客户端状态")?;
+    if current != enable {
+        api.set_client_enabled(&target.email, enable).await?;
+        (client, _) = record(api, target).await?;
+        ensure!(
+            client["enable"].as_bool() == Some(enable),
+            "面板回读的客户端状态与设置不符，请刷新后核对"
+        );
+    }
+    let message = if enable {
+        "客户端已启用"
+    } else {
+        "客户端已停用"
+    };
+    Ok(json!({"message":message,"enable":enable,"updatedAt":client["updatedAt"]}))
 }
 
 pub(super) async fn note_target(target: &Target, api: &PanelApi, note: &str) -> Result<Value> {

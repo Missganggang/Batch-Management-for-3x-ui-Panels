@@ -127,6 +127,14 @@
 .wf-clients .wf-table td>small,.wf-binding-list span,.wf-delete-targets small,.wf-pending small {display:block}
 .wf-binding-list {line-height:1.65}
 .wf-client-share {display:grid;justify-items:start;gap:6px}
+.wf-client-switch {display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:2px 4px;border:0;border-radius:6px;background:transparent;color:var(--wf-muted);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.wf-client-switch>span {position:relative;display:inline-block;width:28px;height:16px;border-radius:12px;background:#737b8d}
+.wf-client-switch>span::before {content:"";position:absolute;top:3px;left:3px;width:10px;height:10px;border-radius:50%;background:#fff}
+.wf-client-switch[aria-checked=true] {color:#17684c}
+.wf-client-switch[aria-checked=true]>span {background:#23825e}
+.wf-client-switch[aria-checked=true]>span::before {left:15px}
+.wf-client-switch:focus-visible {outline:2px solid var(--wf-accent);outline-offset:2px}
+.wf-client-switch:disabled {cursor:wait;opacity:.65}
 .wf-outbounds .wf-subhead {flex-wrap:wrap}
 .wf-test-controls,.wf-test-modes {display:flex;align-items:center}
 .wf-test-controls {gap:10px}
@@ -191,12 +199,13 @@
   .wf-clients .wf-table tbody td:first-child {grid-column:1;grid-row:1;align-items:center}
   .wf-clients .wf-table tbody td:nth-child(2) {flex-wrap:wrap}
   .wf-clients .wf-table tbody td:nth-child(n+3)::before {min-width:3.3em;color:var(--wf-muted);font-size:12px}
-  .wf-clients .wf-table tbody td:nth-child(3)::before {content:"入站"}
-  .wf-clients .wf-table tbody td:nth-child(4)::before {content:"到期"}
-  .wf-clients .wf-table tbody td:nth-child(5)::before {content:"流量"}
-  .wf-clients .wf-table tbody td:nth-child(6)::before {content:"分享"}
-  .wf-clients .wf-table tbody td:nth-child(7)::before {content:"操作"}
-  .wf-clients .wf-table tbody td:nth-child(8)::before {content:"备注"}
+  .wf-clients .wf-table tbody td:nth-child(3)::before {content:"状态"}
+  .wf-clients .wf-table tbody td:nth-child(4)::before {content:"入站"}
+  .wf-clients .wf-table tbody td:nth-child(5)::before {content:"到期"}
+  .wf-clients .wf-table tbody td:nth-child(6)::before {content:"流量"}
+  .wf-clients .wf-table tbody td:nth-child(7)::before {content:"分享"}
+  .wf-clients .wf-table tbody td:nth-child(8)::before {content:"操作"}
+  .wf-clients .wf-table tbody td:nth-child(9)::before {content:"备注"}
   .wf-clients .wf-binding-list {flex-wrap:wrap}
   .wf-clients .wf-note-editor {min-width:0;padding:0}
   .wf-clients .wf-note-editor span {white-space:normal;overflow-wrap:anywhere}

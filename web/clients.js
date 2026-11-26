@@ -10,7 +10,7 @@
   ];
   const dayMs = 86400000;
   const day = time => Number(time) > 0 ? new Date(Number(time)).toLocaleString('zh-CN',{hour12:false})
-    : Number(time) < 0 ? `首次使用后 ${Math.abs(time) / 86400000} 天` : '永久有效';
+    : Number(time) < 0 ? `首次使用后 ${Math.abs(time) / dayMs} 天` : '永久有效';
 
   function exportExpiry(time) {
     if (!(Number(time) > 0)) return day(time);
@@ -19,34 +19,8 @@
     return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   }
 
-  function demoExpiry(current, term) {
-    const now = Date.now();
-    const base = Math.max(current, now);
-    let next;
-    if (term.days) {
-      next = base + term.days * dayMs;
-    } else {
-      const date = new Date(base);
-      const originalDay = date.getUTCDate();
-      date.setUTCDate(1);
-      date.setUTCMonth(date.getUTCMonth() + term.months + 1, 0);
-      date.setUTCDate(Math.min(originalDay, date.getUTCDate()));
-      next = date.getTime();
-    }
-    return current < 0 ? current - (next - base) : next;
-  }
-
-  async function panelClients(ctx, wf, panel) {
-    let clients, inbounds, links, warnings;
-    if (ctx.state.demo) {
-      if (panel.online === false) throw new Error('演示面板离线');
-      inbounds = wf.demoData(panel).inbounds;
-      clients = inbounds.flatMap(i => i.settings.clients.map(c => ({...c, uuid:c.id, inboundIds:[i.id]})));
-      links = []; warnings = [];
-    } else {
-      const result = await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/client-links`);
-      ({clients, inbounds, links, warnings} = result);
-    }
+  async function panelClients(ctx, panel) {
+    const {clients, inbounds, links, warnings} = await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/client-links`);
     const inboundMap = new Map(asList(inbounds).map(i => [String(i.id), i]));
     const shares = new Map();
     for (const link of asList(links)) {
@@ -69,13 +43,16 @@
     const {esc, icon} = ctx;
     const root = document.createElement('div');
     root.className = 'wf-page wf-clients';
-    root.innerHTML = `<div class="wf-heading"><div><h1>客户端管理</h1><p>${ctx.state.demo?'演示工作区':'我的工作区'} · ${ctx.state.panels.length} 个面板</p></div>
+    root.innerHTML = `<div class="wf-heading"><div><h1>客户端管理</h1><p>我的工作区 · ${ctx.state.panels.length} 个面板</p></div>
       <div class="wf-actions"><button class="wf-button" data-refresh-clients>${icon('refresh-cw')}刷新</button>
       <button class="wf-button" data-expiry>${icon('calendar-days')}批量改期</button>
       <button class="wf-button wf-primary" data-create>${icon('plus')}批量添加客户端</button></div></div>
       <div data-warnings class="wf-banners" role="status"></div><div data-pending></div>
       <section class="wf-surface"><div class="wf-subhead"><div class="wf-row"><h2>客户端列表</h2><span class="wf-count" data-count></span></div>
-      <div class="wf-actions wf-client-bulk"><button class="wf-button" data-copy-selected disabled>${icon('copy',15)}复制选中链接</button>
+      <div class="wf-actions wf-client-bulk"><div class="wf-client-filters" role="group" aria-label="快捷筛选">
+      <button type="button" class="wf-button" data-disabled-filter aria-pressed="false" title="只看已停用的客户端">${icon('filter',15)}停用</button>
+      <button type="button" class="wf-button" data-expiring-filter aria-pressed="false" title="只看未来 72 小时内到期的客户端">${icon('calendar-clock',15)}三天内到期</button></div>
+      <button class="wf-button" data-copy-selected disabled>${icon('copy',15)}复制选中链接</button>
       <button class="wf-button" data-export-selected disabled>${icon('download',15)}导出 Excel</button><button class="wf-button" data-notes-selected disabled>${icon('pencil',15)}修改备注</button>
       <button class="wf-button" data-extend-selected disabled>${icon('calendar-days',15)}增加时间</button>
       <button class="wf-button" data-quota-selected disabled>${icon('pencil',15)}修改流量上限</button>
@@ -83,11 +60,15 @@
       <button class="wf-button wf-danger-link" data-delete-selected disabled>删除选中</button></div></div>
       <div class="wf-toolbar"><label class="wf-search">${icon('search',15)}<input type="search" placeholder="搜索客户端、入站或备注" aria-label="搜索客户端、入站或备注"></label>
       <select data-filter class="wf-select" aria-label="筛选面板"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div>
+      <div class="wf-hidden-selection" data-hidden-selection hidden><span></span><button type="button" class="wf-link">清除筛选外的勾选</button></div>
       <div data-list class="wf-table-wrap"><div class="wf-loading">正在读取客户端…</div></div><div data-pagination></div></section>`;
     host.replaceChildren(root);
     const rows = [], selected = new Map(), chosen = new Map(), pending = [], warnings = [];
     const savingStatus = new Set();
     let page = 0;
+    const disabledFilter = root.querySelector('[data-disabled-filter]');
+    const expiringFilter = root.querySelector('[data-expiring-filter]');
+    const hiddenSelection = root.querySelector('[data-hidden-selection]');
     const table = root.querySelector('[data-list]'), batch = root.querySelector('[data-delete-selected]');
     const label = i => i.remark || i.tag || `入站 #${i.id}`;
     const panelName = t => ctx.state.panels.find(p=>p.id===t.panelId)?.name || t.panelId;
@@ -101,7 +82,7 @@
     root.querySelector('[data-create]').onclick = () => wf.open('client.create',ctx);
     root.querySelector('[data-expiry]').onclick = () => wf.open('client.expiry',ctx);
     function shareControls(row) {
-      if (!row.options.length) return '<span class="wf-meta">'+(ctx.state.demo?'演示客户端':row.bindings.length?'无可用 VLESS TCP Reality 链接':'未绑定入站')+'</span>';
+      if (!row.options.length) return '<span class="wf-meta">'+(row.bindings.length?'无可用 VLESS TCP Reality 链接':'未绑定入站')+'</span>';
       const select = row.options.length > 1 ? `<select data-share-inbound class="wf-select" aria-label="选择要分享的入站">${row.options.map(o=>{
         const inbound=row.bindings.find(i=>String(i.id)===String(o.inboundId));
         return `<option value="${esc(o.inboundId)}" ${o===selectedLink(row)?'selected':''}>${esc(label(inbound))} · #${esc(o.inboundId)}</option>`;
@@ -117,8 +98,25 @@
     function draw() {
       if (!root.isConnected) return;
       const query=root.querySelector('[type=search]').value.trim().toLowerCase(), panel=root.querySelector('[data-filter]').value;
-      const filtered=rows.map((row,index)=>({row,index})).filter(({row})=>
-        (!panel || row.panel.id===panel) && (!query || [row.client.email,row.panel.name,noteOf(row.client),...row.bindings.map(label)].some(s=>String(s).toLowerCase().includes(query))));
+      const disabledOnly = disabledFilter.getAttribute('aria-pressed') === 'true';
+      const expiringOnly = expiringFilter.getAttribute('aria-pressed') === 'true';
+      const now = Date.now();
+      const filtered = rows.map((row,index)=>({row,index})).filter(({row}) => {
+        if (panel && row.panel.id !== panel) return false;
+        if (disabledOnly && row.client.enable !== false) return false;
+        const expiry = Number(row.client.expiryTime);
+        if (expiringOnly && !(expiry > now && expiry <= now + 3 * dayMs)) return false;
+        return !query || [row.client.email,row.panel.name,noteOf(row.client),...row.bindings.map(label)]
+          .some(s=>String(s).toLowerCase().includes(query));
+      });
+      const visibleRows = new Set(filtered.map(({row}) => row));
+      const hiddenEntries = [...selected].filter(([,row]) => !visibleRows.has(row));
+      hiddenSelection.hidden = !hiddenEntries.length;
+      hiddenSelection.querySelector('span').textContent = `已选 ${selected.size} 个客户端，其中 ${hiddenEntries.length} 个在当前筛选外`;
+      hiddenSelection.querySelector('button').onclick = () => {
+        for (const [key] of hiddenEntries) selected.delete(key);
+        draw();
+      };
       const pages=Math.max(1,Math.ceil(filtered.length/12));page=Math.min(page,pages-1);
       const shown=filtered.slice(page*12,(page+1)*12);
       batch.disabled=!selected.size;
@@ -139,7 +137,7 @@
           <td>${esc(day(client.expiryTime))}</td><td><div class="wf-traffic-cell"><span>${esc(usageText(client))} / ${esc(quotaText(client))}</span><div class="wf-panel-actions"><button class="wf-link" data-row-quota>改上限</button><button class="wf-link" data-row-reset>重置流量</button></div></div></td><td>${shareControls(row)}</td>
           <td><div class="wf-panel-actions"><button class="wf-link" data-row-extend>增加时间</button>${bindings.length?'<button class="wf-link" data-row-expiry>改期</button>':''}<button class="wf-link wf-danger-link" data-remove-client>删除</button></div></td>
           <td class="wf-client-note"><button class="wf-note-editor" data-row-note title="${esc(noteOf(client) || '添加备注')}" aria-label="修改 ${esc(client.email)} 的备注"><span>${esc(noteOf(client)) || '添加备注'}</span>${icon('pencil',14)}</button></td></tr>`;
-      }).join('')}</tbody></table>`:`<div class="wf-empty">${query||panel?'没有匹配的客户端':warnings.length?'暂无可显示的客户端，请查看读取结果':'暂无客户端'}</div>`;
+      }).join('')}</tbody></table>`:`<div class="wf-empty">${query||panel||disabledOnly||expiringOnly?'没有匹配的客户端':warnings.length?'暂无可显示的客户端，请查看读取结果':'暂无客户端'}</div>`;
       const all=table.querySelector('[data-select-page]');
       if(all){
         const n=shown.filter(({row})=>selected.has(targetKey(row.target))).length;
@@ -234,42 +232,8 @@
       });
     }
     async function editClients(action, targets, change) {
-      if (!ctx.state.demo) {
-        const {results} = await ctx.api(`/api/clients/${action}`, {method:'POST', body:{targets, ...change}});
-        return results;
-      }
-      return targets.map(target => {
-        const panel = ctx.state.panels.find(p => p.id === target.panelId);
-        const client = wf.demoData(panel).inbounds.flatMap(i => i.settings.clients)
-          .find(c => c.id === target.clientId && c.email === target.email);
-        const result = {...target, name:panel.name, ok:false};
-        if (!client) return {...result, message:'客户端已移除'};
-        if (action === 'status') {
-          client.enable = change.enable;
-          return {...result, ok:true, enable:client.enable, message:client.enable?'客户端已启用':'客户端已停用'};
-        }
-        if (action === 'quota') {
-          client.totalGB = change.quotaBytes;
-          return {...result, ok:true, quotaBytes:change.quotaBytes, message:'已更新客户端流量上限'};
-        }
-        if (action === 'reset-traffic') {
-          client.traffic = {...client.traffic, up:0, down:0};
-          client.enable = true;
-          return {...result, ok:true, message:'已重置当前周期流量'};
-        }
-        if (action === 'notes') {
-          if (noteOf(client) !== target.note) return {...result, conflict:true, message:'备注已变化，请重新读取'};
-          client.comment = change.note;
-          return {...result, ok:true, note:change.note, message:'备注已保存'};
-        }
-        if (Number(client.expiryTime || 0) !== target.expiryTime)
-          return {...result, conflict:true, message:'到期时间已变化，请重新读取'};
-        const expiryTime = demoExpiry(target.expiryTime, change);
-        if (!Number.isFinite(new Date(expiryTime).getTime()))
-          return {...result, message:'到期时间超出可表示的日期范围'};
-        client.expiryTime = expiryTime;
-        return {...result, ok:true, expiryTime:client.expiryTime, message:`新的有效期为 ${day(client.expiryTime)}`};
-      });
+      const {results} = await ctx.api(`/api/clients/${action}`, {method:'POST', body:{targets, ...change}});
+      return results;
     }
     async function changeStatus(row, index) {
       const key = targetKey(row.target);
@@ -290,7 +254,7 @@
         row.client.enable = null;
         ctx.toast(err.message, 'error');
         try {
-          const fresh = await panelClients(ctx, wf, row.panel);
+          const fresh = await panelClients(ctx, row.panel);
           const current = fresh.rows.find(r => targetKey(r.target) === key);
           if (current) Object.assign(row, current);
         } catch {
@@ -298,10 +262,13 @@
         }
       } finally {
         savingStatus.delete(key);
+        if (disabledFilter.getAttribute('aria-pressed') === 'true') draw();
         const slot = cell();
         if (slot) {
           slot.innerHTML = statusControl(row);
           if (hadFocus && document.activeElement === document.body) slot.querySelector('button')?.focus({preventScroll:true});
+        } else if (hadFocus && root.isConnected && document.activeElement === document.body) {
+          disabledFilter.focus({preventScroll:true});
         }
       }
     }
@@ -431,7 +398,7 @@
             const fresh = new Map();
             const panels = new Set(conflicts.map(r => r.panel));
             for (const panel of panels) {
-              const inventory = await panelClients(ctx, wf, panel);
+              const inventory = await panelClients(ctx, panel);
               for (const row of inventory.rows) fresh.set(targetKey(row.target), row);
             }
             if (!resultDialog.open || !root.isConnected) return;
@@ -456,15 +423,6 @@
       });
     }
     async function remove(targets) {
-      if(ctx.state.demo){
-        return targets.map(t=>{
-          const panel=ctx.state.panels.find(p=>p.id===t.panelId);
-          const data=wf.demoData(panel);
-          for(const inbound of data.inbounds){inbound.settings.clients=inbound.settings.clients.filter(c=>c.id!==t.clientId);}
-          panel.clients=data.inbounds.reduce((n,i)=>n+i.settings.clients.length,0);
-          return {...t,name:panel.name,ok:true,message:'已删除演示客户端'};
-        });
-      }
       const result=await ctx.api('/api/clients/delete',{method:'POST',body:{targets}});
       return result.results;
     }
@@ -474,7 +432,7 @@
     function confirmDelete(items) {
       const entries=[...new Map(items.map(row=>[targetKey(row.target),row])).values()];
       if(!entries.length)return;
-      const scope=ctx.state.demo?'将从演示工作区删除所选客户端。':'将从远端 3x-ui 删除所选客户端及其全部入站绑定，并清理关联线路。';
+      const scope='将从远端 3x-ui 删除所选客户端及其全部入站绑定，并清理关联线路。';
       const dialog=wf.modal(ctx,'删除客户端','users',`<form id="wf-form" class="wf-form"><p>${scope}</p><ul class="wf-delete-targets">${entries.map(r=>`<li><strong>${esc(r.target.email)}</strong><small>${esc(panelName(r.target))} · ${esc(r.bindings.map(label).join('、')||'未绑定入站')}</small></li>`).join('')}</ul><div class="wf-inline-error" role="alert"></div></form>`,wf.submitFooter(`确认删除 ${entries.length} 个客户端`));
       dialog.querySelector('[data-wf-submit]').classList.add('wf-danger');
       wf.bindForm(dialog,async()=>{
@@ -522,12 +480,19 @@
     root.querySelector('[data-reset-selected]').onclick=()=>trafficDialog('reset-traffic',[...selected.values()]);
     root.querySelector('[type=search]').oninput=()=>{page=0;draw();};
     root.querySelector('[data-filter]').onchange=()=>{page=0;draw();};
-    const pendingRequest=ctx.state.demo?Promise.resolve({pending:[]}):ctx.api('/api/clients/deletions');
+    for (const button of [disabledFilter, expiringFilter]) {
+      button.onclick = () => {
+        button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+        page = 0;
+        draw();
+      };
+    }
+    const pendingRequest=ctx.api('/api/clients/deletions');
     const panels=ctx.state.panels.slice();
     const [inventory,cleanups]=await Promise.allSettled([
       (async()=>{
         for(let i=0;i<panels.length;i+=6){
-          const results=await Promise.allSettled(panels.slice(i,i+6).map(p=>panelClients(ctx,wf,p)));
+          const results=await Promise.allSettled(panels.slice(i,i+6).map(p=>panelClients(ctx,p)));
           if(!root.isConnected)return;
           results.forEach((r,offset)=>{
             const panel=panels[i+offset];

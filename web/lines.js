@@ -103,8 +103,6 @@
     const i=Math.min(5,Math.max(0,Math.floor(Math.log(Math.max(Number(n),1))/Math.log(1024))));
     return Number((Number(n)/1024**i).toFixed(i?1:0))+' '+['B','KB','MB','GB','TB','PB'][i];
   }
-  const lastPanel=()=>{try{return localStorage.getItem('nexus.line.panel')||'';}catch{return '';}};
-  const remember=id=>{try{localStorage.setItem('nexus.line.panel',id);}catch{}};
   const linesPerPage = 12;
   let page=null;
   function dialog(title,body,ctx) {
@@ -202,15 +200,19 @@
       e.currentTarget.innerHTML=icon(show?'eye-off':'eye',16);e.currentTarget.setAttribute('aria-label',show?'隐藏 SOCKS5':'显示 SOCKS5');
     };
     panelChoice.onchange=()=>{
-      remember(panelChoice.value);
+      form.querySelector('[data-host]').hidden=!panelChoice.value;
+      form.querySelector('[role=alert]').textContent='';
       model.listPage=1;
       drawLines(model);
     };
     form.onsubmit=async e=>{
       e.preventDefault();if(model.creating)return;
-      if(!panelChoice.value){addPanel();return;}
-      const body={panelId:panelChoice.value,name:form.elements.name.value.trim(),socks5:form.elements.socks5.value.trim()};
       const output=form.querySelector('[role=alert]');
+      if(!model.panels.some(p=>String(p.id)===panelChoice.value)){
+        output.textContent=model.panels.length?'请选择一个目标面板，再创建线路。':'请先接入一个面板。';
+        panelChoice.focus();return;
+      }
+      const body={panelId:panelChoice.value,name:form.elements.name.value.trim(),socks5:form.elements.socks5.value.trim()};
       if(!body.name||!body.socks5){output.textContent='请填写线路名称和 SOCKS5 出口';return;}
       if(/[\s/\\]/u.test(body.name)||['api','.','..'].includes(body.name)){
         output.textContent='请使用不含空格或斜杠的线路名称，避开保留名称 api、. 和 ..';form.elements.name.focus();return;
@@ -236,7 +238,8 @@
       if(b.dataset.op==='renew')renew(line,model);
       if(b.dataset.op==='reality')repairReality(line,model);
       if(b.dataset.op==='retry'){
-        form.elements.name.value=line.name;panelChoice.value=line.panelId;remember(line.panelId);
+        form.elements.name.value=line.name;panelChoice.value=line.panelId;
+        panelChoice.dispatchEvent(new Event('change'));
         form.elements.socks5.value='';form.querySelector('[role=alert]').textContent='重新填写这条线路原来的 SOCKS5 出口后提交。';
         form.elements.socks5.focus();form.scrollIntoView({block:'center',behavior:'smooth'});
       }
@@ -246,17 +249,12 @@
   function updatePanels(model) {
     const form=model.root.querySelector('form'),select=form.elements.panelId;
     const previous=select.disabled?'':select.value;
-    const selected=previous || lastPanel();
-    select.replaceChildren();
+    select.replaceChildren(new Option(model.panels.length?'全部面板':'请先接入面板',''));
     model.panels.forEach(p=>select.add(new Option(p.name,p.id)));
-    if(!model.panels.length)select.add(new Option('请先接入面板',''));
-    if(model.panels.some(p=>String(p.id)===selected))select.value=selected;
-    if(previous!==select.value) {
-      model.listPage=1;
-      remember(select.value);
-    }
+    if(model.panels.some(p=>String(p.id)===previous))select.value=previous;
+    if(previous!==select.value)model.listPage=1;
     select.disabled=!model.panels.length;
-    form.querySelector('[data-host]').hidden=!model.panels.length;
+    form.querySelector('[data-host]').hidden=!select.value;
     form.querySelector('.ln-panel-support').classList.toggle('ln-needs-panel',!model.panels.length);
     form.querySelector('[type=submit]').disabled=model.creating||!model.panels.length;
     form.querySelector('[data-batch]').disabled=model.creating||!model.panels.length;
@@ -266,7 +264,7 @@
     const select=root.querySelector('[name=panelId]');
     const panelId=select.disabled?'':select.value;
     const term=root.querySelector('[type=search]').value.trim().toLowerCase();
-    const panelLines=lines.filter(l=>String(l.panelId)===panelId);
+    const panelLines=panelId?lines.filter(l=>String(l.panelId)===panelId):lines;
     const list=panelLines.filter(l=>(l.name+' '+l.panelName).toLowerCase().includes(term));
     const pages = Math.max(1, Math.ceil(list.length / linesPerPage));
     model.listPage = Math.min(Math.max(1, model.listPage), pages);
@@ -306,6 +304,10 @@
     }else{
       errors.push(rows.reason.message);
       model.lines=model.lines.map(line=>({...line,online:null,up:null,down:null}));
+    }
+    if(panels.status==='fulfilled'){
+      const panelIds=new Set(model.panels.map(p=>p.id));
+      model.lines=model.lines.filter(line=>panelIds.has(line.panelId));
     }
     ctx.state.error=errors.join(' · ');
     root.querySelector('.ln-alerts').innerHTML=[...new Set(errors)].map(e=>'<p>'+icon('circle-alert',15)+ctx.esc(e)+'</p>').join('');
@@ -369,6 +371,7 @@
     const clients=form.querySelector('[data-clients]');
     const outcomes=new Map();
     let submitted=false,processing=false;
+    panel.add(new Option('请选择目标面板',''));
     model.panels.forEach(p=>panel.add(new Option(p.name,p.id)));
     panel.value=active;
     const readLimits = bindLimits(form);
@@ -384,6 +387,7 @@
       editor.addEventListener('input',()=>{message.textContent='';validate();});
       editor.addEventListener('scroll',()=>{if(other.scrollTop!==editor.scrollTop)other.scrollTop=editor.scrollTop;});
     }
+    panel.addEventListener('change',validate);
     validate();
     d.addEventListener('cancel',event=>{if(processing)event.preventDefault();});
     clients.onclick=()=>{d.close();ctx.navigate('clients');};

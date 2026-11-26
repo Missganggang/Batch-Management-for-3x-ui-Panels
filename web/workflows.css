@@ -155,6 +155,10 @@
 .wf-pending {border:1px solid #ecd8be;background:#fff9ee;border-radius:9px;padding:14px 16px;margin-bottom:16px}
 .wf-pending>div {display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:8px}
 .wf-clients .wf-subhead {flex-wrap:wrap}
+.wf-client-filters {display:inline-flex;gap:6px;border-right:1px solid var(--wf-line);padding-right:8px}
+.wf-client-filters button[aria-pressed=true] {color:var(--wf-accent);background:var(--wf-soft);border-color:#9d93e9}
+.wf-hidden-selection {display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:0 22px 12px;color:var(--wf-muted);font-size:12px}
+.wf-hidden-selection[hidden] {display:none}
 .wf-clients td.wf-client-note {min-width:105px;max-width:235px}
 .wf-note-editor {display:flex;align-items:center;gap:7px;max-width:100%;padding:4px 0;background:none;border:0;color:#515970;text-align:left;cursor:pointer}
 .wf-note-editor span {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -46,23 +46,14 @@ button svg,a svg {flex:none}
 .nx-account small {color:var(--nx-muted);font:400 10px/1.5 "Segoe UI",sans-serif;margin-top:2px}
 .nx-workspace {margin-left:var(--nx-sidebar)}
 .nx-topbar {height:62px;padding:0 32px;display:flex;align-items:center;justify-content:space-between;gap:14px;background:#fff;border-bottom:1px solid var(--nx-border)}
-.nx-crumb,.nx-top-actions,.nx-sync,.nx-mode-toggle {display:flex;align-items:center}
+.nx-crumb,.nx-sync {display:flex;align-items:center}
 .nx-crumb {gap:12px;color:#808698;font-size:12px;white-space:nowrap}
 .nx-crumb strong {color:#484d63;font-weight:580}
 .nx-desktop-crumb-icon {display:flex;color:#74788c}
 .nx-slash {color:#b7bac7}
-.nx-top-actions {gap:17px}
 .nx-sync {font-size:11px;color:#73798b;gap:7px;font-variant-numeric:tabular-nums}
 .nx-sync i,.nx-connect-dot {width:6px;height:6px;border-radius:50%;display:inline-block;background:#38a77c}
 .nx-sync.nx-sync-error i {background:#d4895d}
-.nx-top-divider {width:1px;height:17px;background:var(--nx-border)}
-.nx-mode-wrap {position:relative}
-.nx-mode-toggle {gap:7px;background:#f7f6fd;color:#6b58a7;border:1px solid #e8e4f5;border-radius:6px;padding:6px 9px;font-size:11px;font-weight:550;min-height:29px}
-.nx-mode-toggle:hover {background:#eeebfa}
-.nx-mode-menu {position:absolute;z-index:20;top:calc(100% + 8px);right:0;width:180px;border:1px solid #dfdfeb;background:white;padding:5px;border-radius:8px;box-shadow:0 9px 28px #22243c1a}
-.nx-mode-menu button {display:flex;gap:10px;align-items:center;width:100%;background:none;border:0;text-align:left;border-radius:5px;padding:10px;color:#46485b;font-size:13px}
-.nx-mode-menu button:hover {background:#f3f0fc}
-.nx-mode-menu button svg:last-child:not(:first-child) {margin-left:auto;color:var(--nx-accent)}
 .nx-mobile-menu,.nx-mask {display:none}
 #main-content {padding:29px 32px 36px;max-width:1730px;margin:auto;outline:none}
 .nx-heading,.nx-heading-actions,.nx-section-head,.nx-heading-meta,.nx-legend,.nx-status-tag,.nx-metric-title,.nx-stat-foot,.nx-panel-title,.nx-area,.nx-inventory-counts,.nx-card-action,.nx-right-title {display:flex;align-items:center}
@@ -174,5 +165,5 @@ button svg,a svg {flex:none}
 @media(max-width:1050px){:root{--nx-sidebar:166px}#primary-nav{padding-inline:10px}.nx-navitem{gap:9px;padding-inline:11px}.nx-brand{padding:0 17px}.nx-version{padding:8px}.nx-topbar{padding:0 18px}#main-content{padding:21px 18px}.nx-metric-value{font-size:27px}.nx-spark{width:40px;top:57px;opacity:.85}.nx-panorama{gap:12px}.nx-network{padding:17px 14px 0}.nx-health-stats>div{padding-left:10px}.nx-chart-card{padding:16px 14px 12px}.nx-table-head{padding:15px}.nx-table td:first-child,.nx-table th:first-child{padding-left:15px}.nx-table td,.nx-table th{padding-inline:8px}}
 @media(max-width:820px){:root{--nx-sidebar:0px}.nx-sidebar{width:218px;transform:translateX(-100%);transition:transform .18s ease}.nx-sidebar.is-open{transform:translateX(0)}.nx-mask{display:block;position:fixed;inset:0;background:#18162955;z-index:9;border:0}.nx-mobile-menu{display:inline-flex!important}.nx-desktop-crumb-icon{display:none}.nx-crumb{gap:9px}.nx-topbar{height:53px}.nx-brand{min-height:77px}.nx-navgroup{margin-bottom:14px}.nx-plot{height:192px}.nx-chart-card,.nx-network{min-height:273px}}
 @media(min-width:821px){.nx-mobile-menu{display:none!important}}
-@media(max-width:660px){.nx-heading{align-items:flex-start;gap:12px;margin-bottom:18px}.nx-heading h1{font-size:25px}.nx-heading-meta{font-size:10.5px;gap:4px}.nx-heading-actions{gap:5px}.nx-heading-actions button{font-size:11px;min-height:33px;padding:6px 9px}.nx-heading-actions .nx-secondary span{display:none}.nx-heading-actions .nx-secondary{width:33px}.nx-top-actions{gap:8px}.nx-sync,.nx-top-divider{display:none}.nx-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:13px}.nx-metric{padding:11px 13px}.nx-metric-icon{width:26px;height:26px}.nx-metric-title{font-size:11px}.nx-metric-value{font-size:27px;margin:5px 0 3px}.nx-spark{top:42px;width:49px;height:30px}.nx-panorama{grid-template-columns:minmax(0,1fr);margin-bottom:13px}.nx-chart-card{min-height:243px}.nx-plot{height:170px}.nx-network{min-height:220px;display:grid;grid-template: auto auto 1fr / 1fr;padding:15px 16px 0}.nx-map{height:97px;min-height:0;overflow:hidden}.nx-map svg{height:100%;width:100%}.nx-health-stats{padding:9px 0}.nx-health-stats strong{font-size:18px}.nx-table table{min-width:590px}.nx-table-actions{gap:7px}.nx-table-head{padding:12px}.nx-card-action{font-size:10px}#main-content{padding:18px 12px 26px}.nx-topbar{padding:0 12px}.nx-heading-meta svg{width:12px;height:12px}.nx-table-head h2,.nx-section-head h2{font-size:15px}}
+@media(max-width:660px){.nx-heading{align-items:flex-start;gap:12px;margin-bottom:18px}.nx-heading h1{font-size:25px}.nx-heading-meta{font-size:10.5px;gap:4px}.nx-heading-actions{gap:5px}.nx-heading-actions button{font-size:11px;min-height:33px;padding:6px 9px}.nx-heading-actions .nx-secondary span{display:none}.nx-heading-actions .nx-secondary{width:33px}.nx-sync{display:none}.nx-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:13px}.nx-metric{padding:11px 13px}.nx-metric-icon{width:26px;height:26px}.nx-metric-title{font-size:11px}.nx-metric-value{font-size:27px;margin:5px 0 3px}.nx-spark{top:42px;width:49px;height:30px}.nx-panorama{grid-template-columns:minmax(0,1fr);margin-bottom:13px}.nx-chart-card{min-height:243px}.nx-plot{height:170px}.nx-network{min-height:220px;display:grid;grid-template: auto auto 1fr / 1fr;padding:15px 16px 0}.nx-map{height:97px;min-height:0;overflow:hidden}.nx-map svg{height:100%;width:100%}.nx-health-stats{padding:9px 0}.nx-health-stats strong{font-size:18px}.nx-table table{min-width:590px}.nx-table-actions{gap:7px}.nx-table-head{padding:12px}.nx-card-action{font-size:10px}#main-content{padding:18px 12px 26px}.nx-topbar{padding:0 12px}.nx-heading-meta svg{width:12px;height:12px}.nx-table-head h2,.nx-section-head h2{font-size:15px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important}}

@@ -8,30 +8,13 @@
     ['高级管理', [['overview','面板概览','layout-dashboard'],['inbounds','入站管理','log-in'],['outbounds','出站管理','log-out'],['routes','路由管理','workflow'],['activity','操作记录','history']]]
   ];
   const pages = new Map(groups.flatMap(([,rows]) => rows.map(([id,label]) => [id,label])));
-  const gb = 1024 ** 3;
   const hour = 3600000;
-  const demoPanels = [
-    ['hk-01','香港核心节点','中国香港','HK',8,58,784],
-    ['sg-01','新加坡边缘节点','新加坡','SG',6,46,639],
-    ['jp-01','东京核心节点','日本东京','JP',5,38,553],
-    ['us-01','洛杉矶节点','美国洛杉矶','US',4,31,472],
-    ['de-01','法兰克福节点','德国法兰克福','DE',3,24,401],
-    ['tw-01','台北边缘节点','中国台湾','TW',3,21,368],
-    ['hk-02','香港备用节点','中国香港','HK',2,17,355],
-    ['sg-02','新加坡备用节点','新加坡','SG',1,13,340]
-  ].map(([id,name,region,code,inbounds,clients,total], i) => ({
-    id:'demo-'+id,name,url:'https://'+id+'.example.net',region,code,online:i!==4,inbounds,clients,
-    up:Math.round(total*gb*.23),down:Math.round(total*gb*.77)
-  }));
-  const demoActivity = [];
-  const state = {demo:false,panels:[],history:[],activity:[],updatedAt:0,page:'lines',error:''};
+  const state = {panels:[],history:[],updatedAt:0,page:'lines',error:''};
   const main = document.getElementById('main-content');
   const nav = document.getElementById('primary-nav');
-  const modeMenu = document.getElementById('mode-menu');
-  const modeButton = document.getElementById('mode-toggle');
   let selectedRange = 24, filter = 'all', chartObserver, requestId = 0, advancedOpen = false;
   let loading = false;
-  const ctx = {state,icon,esc,toast,navigate,refresh,setMode,api,render,bytes};
+  const ctx = {state,icon,esc,toast,navigate,refresh,api,render,bytes};
 
   function toast(message, type='success') {
     const stack = document.getElementById('nx-toast-stack');
@@ -78,39 +61,13 @@
     document.getElementById('mobile-mask').hidden = true;
     document.getElementById('mobile-menu').setAttribute('aria-expanded','false');
   }
-  function closeModeMenu() {
-    modeMenu.hidden=true;
-    modeButton.setAttribute('aria-expanded','false');
-  }
-  async function setMode(mode) {
-    const demo = mode==='demo';
-    requestId++;
-    closeModeMenu();
-    if (demo!==state.demo) {
-      state.demo=demo;
-      state.panels=demo ? demoPanels : [];
-      state.activity=demo ? demoActivity : [];
-      state.history=[];
-      state.updatedAt=demo ? Date.now() : 0;
-      state.error='';
-      filter='all';
-      main.replaceChildren();
-    }
-    await refresh();
-  }
   async function refresh() {
     const id=++requestId;
     if (state.page==='lines') {
+      loading=false;
       renderShell();
       await window.Lines.mount(main,ctx);
       if (id===requestId) renderShell();
-      return;
-    }
-    if (state.demo) {
-      state.updatedAt=Date.now();
-      state.error='';
-      loading=false;
-      render();
       return;
     }
     loading=true;
@@ -138,10 +95,6 @@
       return i===0?'<div class="nx-navgroup"><h2>'+group+'</h2>'+links+'</div>':'<details class="nx-navgroup nx-advanced" '+(advancedOpen||rows.some(r=>r[0]===state.page)?'open':'')+'><summary>'+icon('settings-2',17)+group+icon('chevron-down',13)+'</summary>'+links+'</details>';
     }).join('');
     nav.querySelector('details').ontoggle=e=>{advancedOpen=e.currentTarget.open;};
-    modeButton.closest('.nx-mode-wrap').hidden=state.page==='lines';
-    document.querySelector('.nx-top-divider').hidden=state.page==='lines';
-    modeButton.innerHTML=icon(state.demo?'flask-conical':'server',13)+'<span>'+(state.demo?'演示工作区':'我的工作区')+'</span>'+icon('chevron-down',13);
-    modeMenu.innerHTML=[['demo','演示工作区','flask-conical'],['live','我的工作区','server']].map(([id,label,ic])=>'<button data-mode="'+id+'">'+icon(ic,15)+label+((id==='demo')===state.demo?icon('check',14):'')+'</button>').join('');
     const stamp=state.updatedAt ? new Date(state.updatedAt).toLocaleTimeString('zh-CN',{hour12:false}) : '';
     const sync=document.getElementById('sync-label');
     sync.classList.toggle('nx-sync-error',Boolean(state.error));
@@ -185,14 +138,11 @@
     const missing=p.filter(x=>x.inbounds==null).length;
     const scope=missing?'已同步 '+(p.length-missing)+' / '+p.length+' 个面板':'';
     const noData=missing>0 && missing===p.length;
-    const trends=state.demo ? [
-      [8,8,9,9,10,9,10,11,11,12,13,13], [1,3,2,5,4,7,6,7,6,10,9,12],
-      [2,3,3,5,4,6,6,8,7,9,8,12], [2,4,3,6,5,9,6,10,8,11,10,14]
-    ] : [[],[],[],state.history.slice(-18).map(h=>Number(h.up)+Number(h.down))];
-    return metric('面板总数','server','#7860d6','#f0edfc',nfmt(p.length),'','<i></i><em>'+online+' 个在线</em>',trends[0],0)
-      +metric('入站总数','log-in','#4389ca','#eaf3fc',noData?'—':nfmt(totals('inbounds')),'',scope || (state.demo?'VLESS · TCP · REALITY':'已同步面板'),trends[1],1)
-      +metric('客户端数','users-round','#3c9a86','#e8f6f0',noData?'—':nfmt(totals('clients')),'',scope || '已配置客户端',trends[2],2)
-      +metric('累计流量','activity','#ce8750','#fcf1e7',noData?'—':volume,noData?'':unit,scope || '上行与下行合计',trends[3],3);
+    const trafficTrend=state.history.slice(-18).map(h=>Number(h.up)+Number(h.down));
+    return metric('面板总数','server','#7860d6','#f0edfc',nfmt(p.length),'','<i></i><em>'+online+' 个在线</em>',[],0)
+      +metric('入站总数','log-in','#4389ca','#eaf3fc',noData?'—':nfmt(totals('inbounds')),'',scope || '已同步面板',[],1)
+      +metric('客户端数','users-round','#3c9a86','#e8f6f0',noData?'—':nfmt(totals('clients')),'',scope || '已配置客户端',[],2)
+      +metric('累计流量','activity','#ce8750','#fcf1e7',noData?'—':volume,noData?'':unit,scope || '上行与下行合计',trafficTrend,3);
   }
   function spline(pts) {
     if (!pts.length) return '';
@@ -251,19 +201,10 @@
     chartObserver.observe(plot);
   }
   function chartSeries() {
-    const now=state.updatedAt||Date.now();
-    const end=state.demo?Math.floor(now/hour)*hour:now;
+    const end=state.updatedAt||Date.now();
     const start=end-selectedRange*hour;
-    if (!state.demo) {
-      return state.history.filter(s=>Number.isFinite(Number(s.ts))&&Number(s.ts)>=start&&Number(s.ts)<=end)
-        .map(s=>({ts:Number(s.ts),up:Number(s.up)||0,down:Number(s.down)||0})).sort((a,b)=>a.ts-b.ts);
-    }
-    const baseline=[.24,.28,.25,.31,.27,.45,.34,.37,.61,.55,.58,.39,.44,.71,.64,.74,.58,.62,.49,.57,.78,.7,.88,.65,.72,.59,.67,.50,.56,.76,.68,.75,.63,.72,.86,.79,.91,.78,.70,.82,.67,.71,.64,.60,.74,.64,.71,.84];
-    const count=selectedRange===24?baseline.length:selectedRange===168?28:30;
-    return Array.from({length:count},(_,i)=>{
-      const d=baseline[(i+(selectedRange===24?0:7))%baseline.length],scale=selectedRange===24?72:selectedRange===168?230:330;
-      return {ts:start+(end-start)*i/(count-1),down:d*scale*gb,up:(d*.43+.05+(Math.sin(i*1.8)*.06))*scale*gb};
-    });
+    return state.history.filter(s=>Number.isFinite(Number(s.ts))&&Number(s.ts)>=start&&Number(s.ts)<=end)
+      .map(s=>({ts:Number(s.ts),up:Number(s.up)||0,down:Number(s.down)||0})).sort((a,b)=>a.ts-b.ts);
   }
   function renderChart(plot) {
     if (!plot.isConnected) return;
@@ -278,12 +219,12 @@
     const rough=rawMax/divisor/4,stepBase=10**Math.floor(Math.log10(rough));
     const step=[1,2,2.5,5,10].find(v=>v*stepBase>=rough)*stepBase;
     const max=4*step*divisor;
-    const end=state.demo?data[data.length-1].ts:(state.updatedAt||Date.now()),start=end-selectedRange*hour;
+    const end=state.updatedAt||Date.now(),start=end-selectedRange*hour;
     const x=p=>left+(p.ts-start)/(end-start)*(right-left),y=v=>bottom-(v/max)*(bottom-top);
     // The server returns hourly buckets. Leave gaps where the collectors were offline.
     const segments=[];
     data.forEach((point,index)=>{
-      if (!index || (!state.demo && point.ts-data[index-1].ts>hour*1.5)) segments.push([]);
+      if (!index || point.ts-data[index-1].ts>hour*1.5) segments.push([]);
       segments[segments.length-1].push(point);
     });
     const curves=segments.map(points=>{
@@ -340,13 +281,7 @@
     if (ev.target.id==='nx-range') { selectedRange=Number(ev.target.value); renderChart(document.getElementById('nx-plot')); }
     if (ev.target.id==='nx-status-filter') { filter=ev.target.value; main.querySelector('.nx-table tbody').innerHTML=panelRows(); }
   });
-  modeButton.addEventListener('click',()=>{
-    modeMenu.hidden=!modeMenu.hidden;
-    modeButton.setAttribute('aria-expanded',String(!modeMenu.hidden));
-  });
-  modeMenu.addEventListener('click',ev=>{const b=ev.target.closest('[data-mode]');if(b) setMode(b.dataset.mode);});
-  document.addEventListener('click',ev=>{if(!ev.target.closest('.nx-mode-wrap')) closeModeMenu();});
-  document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){closeModeMenu();closeSidebar();}});
+  document.addEventListener('keydown',ev=>{if(ev.key==='Escape')closeSidebar();});
   document.getElementById('mobile-mask').addEventListener('click',closeSidebar);
   document.getElementById('mobile-menu').innerHTML=icon('menu',18);
   document.getElementById('crumb-icon').innerHTML=icon('panels-top-left',16);
@@ -357,8 +292,7 @@
   });
   nav.addEventListener('click',ev=>{if(ev.target.closest('a'))closeSidebar();});
   window.addEventListener('hashchange',()=>{
-    state.page=currentPage();closeSidebar();closeModeMenu();window.scrollTo(0,0);
-    if(state.page==='lines') {setMode('live');return;}
+    state.page=currentPage();closeSidebar();window.scrollTo(0,0);
     main.replaceChildren();refresh();
   });
   state.page=currentPage();

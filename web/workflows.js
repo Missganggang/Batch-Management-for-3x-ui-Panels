@@ -15,7 +15,6 @@
     backups: ['数据备份', '备份面板', '面板', 'database', '下载备份', 'backup'],
     activity: ['操作记录', '最近操作', '记录', 'history']
   };
-  const demoStore = new Map();
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const list = v => Array.isArray(v) ? v : [];
   const date = v => Number(v) > 0 ? new Date(Number(v)).toLocaleString('zh-CN',{hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : Number(v) < 0 ? `首次使用后 ${Math.abs(Number(v))/86400000} 天` : '永久有效';
@@ -30,46 +29,7 @@
     if (typeof inbound.settings !== 'string') return inbound.settings || {};
     try { return JSON.parse(inbound.settings) || {}; } catch { return {}; }
   }
-  function demoData(panel) {
-    if (demoStore.has(panel.id)) return demoStore.get(panel.id);
-    const inboundCount = Math.max(0, Number(panel.inbounds)||0);
-    const clientCount = Math.max(0, Number(panel.clients)||0);
-    const inbounds = Array.from({length:inboundCount},(_,i)=>({
-      id:i+1,remark:`Reality · ${String(i+1).padStart(2,'0')}`,port:i===0?443:8442+i,
-      protocol:'vless',enable:true,expiryTime:0,settings:{clients:[]}
-    }));
-    for(let i=0;i<clientCount && inbounds.length;i++) {
-      const dest=inbounds[i%inbounds.length];
-      dest.settings.clients.push({id:`demo-${i+1}`,email:`client-${String(i+1).padStart(3,'0')}`,enable:true,flow:'xtls-rprx-vision',expiryTime:i%4===1?Date.now()+14*86400000:0,
-        totalGB:i%2 ? 100 * 1024**3 : 0, traffic:{up:(i+1)*1024**2, down:(i+1)*16*1024**2}});
-    }
-    const rules=[
-      {type:'field',inboundTag:['api'],outboundTag:'api'},
-      {type:'field',ip:['geoip:private'],outboundTag:'blocked'},
-      {type:'field',protocol:['bittorrent'],outboundTag:'blocked'}
-    ];
-    const cfg={inbounds,config:{outbounds:[{tag:'direct',protocol:'freedom',settings:{}},{tag:'blocked',protocol:'blackhole',settings:{}}],routing:{rules}}};
-    const sample=inbounds[0]?.settings.clients[0];
-    if(sample){
-      const tag=sample.email;
-      cfg.config.outbounds.push({tag,protocol:'socks',settings:{servers:[{address:'192.0.2.1',port:1080}]}});
-      inbounds[0].tag=tag;
-      if(panel.id==='demo-hk-02'){
-        cfg.exampleLegacy={type:'field',ruleTag:tag,inboundTag:[tag],outboundTag:tag};
-        rules.splice(1,0,cfg.exampleLegacy);
-      }else{
-        rules.push({type:'field',ruleTag:tag,user:[tag],outboundTag:tag});
-      }
-    }
-    demoStore.set(panel.id,cfg);
-    return cfg;
-  }
   async function resources(ctx,panel,kind) {
-    if(ctx.state.demo) {
-      if(panel.online===false) throw new Error('演示面板离线');
-      const data=demoData(panel);
-      return kind==='inbounds'?data.inbounds:data.config;
-    }
     const res=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/${kind}`);
     return kind==='inbounds'?list(res.inbounds):res.config;
   }
@@ -123,11 +83,8 @@
     const el=modal(ctx,'编辑面板备注','pencil',body,submitFooter('保存备注'));
     bindForm(el,async form=>{
       const note=form.elements.note.value.trim();
-      if(ctx.state.demo) panel.note=note;
-      else {
-        const saved=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/note`,{method:'POST',body:{note,expectedNote}});
-        panel.note=saved.note;
-      }
+      const saved=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/note`,{method:'POST',body:{note,expectedNote}});
+      panel.note=saved.note;
       const current=ctx.state.panels.find(p=>p.id===panel.id);
       if(current) current.note=panel.note;
       el.close();
@@ -136,7 +93,7 @@
     });
   }
   function addPanel(ctx) {
-    const body=`<form id="wf-form" class="wf-form"><div class="wf-grid">${field('面板名称',input('name','例如 香港主面板','','maxlength="80" autocomplete="off"'),'留空时使用面板域名。')}${field('地区（可选）',input('region','例如 香港','','maxlength="80"'))}</div>${field('面板地址',input('url','https://panel.example.com/自定义路径/','','type="url" required autocomplete="off" spellcheck="false"'),'填写含自定义路径的面板根地址。')}${field('分享地址（可选）',input('publicHost','公网域名或 IP','','autocomplete="off" spellcheck="false"'),'当客户端连接地址与面板域名不同时填写。')}${panelNoteField()}${field('API 令牌',input('token','输入 3x-ui API 令牌','','type="password" required autocomplete="new-password" spellcheck="false"'))}<label class="wf-check"><input type="checkbox" name="sync" checked>接入后同步已有数据</label>${ctx.state.demo?'<div class="wf-note">接入成功后将切换至实际工作区。</div>':''}<div class="wf-inline-error" role="alert"></div></form>`;
+    const body=`<form id="wf-form" class="wf-form"><div class="wf-grid">${field('面板名称',input('name','例如 香港主面板','','maxlength="80" autocomplete="off"'),'留空时使用面板域名。')}${field('地区（可选）',input('region','例如 香港','','maxlength="80"'))}</div>${field('面板地址',input('url','https://panel.example.com/自定义路径/','','type="url" required autocomplete="off" spellcheck="false"'),'填写含自定义路径的面板根地址。')}${field('分享地址（可选）',input('publicHost','公网域名或 IP','','autocomplete="off" spellcheck="false"'),'当客户端连接地址与面板域名不同时填写。')}${panelNoteField()}${field('API 令牌',input('token','输入 3x-ui API 令牌','','type="password" required autocomplete="new-password" spellcheck="false"'))}<label class="wf-check"><input type="checkbox" name="sync" checked>接入后同步已有数据</label><div class="wf-inline-error" role="alert"></div></form>`;
     const el=modal(ctx,'接入面板','server',body,submitFooter('测试并接入'));
     bindForm(el,async form=>{
       const fields=Object.fromEntries(new FormData(form));
@@ -146,7 +103,7 @@
       try{if(res.panel?.id)localStorage.setItem('nexus.line.panel',res.panel.id);}catch{}
       form.elements.token.value='';
       el.close();
-      await ctx.setMode('live');
+      await ctx.refresh();
       if(res.syncError)showSync(ctx,res.panel,{error:res.syncError,connected:true});
       else if(res.sync)showSync(ctx,res.panel,{result:res.sync,connected:true});
       else ctx.toast('面板已接入');
@@ -190,14 +147,7 @@
       if(el.dataset.busy==='1')return;
       el.dataset.busy='1';close.disabled=true;status.textContent='正在读取入站、客户端、出站和路由规则…';
       try{
-        let result;
-        if(ctx.state.demo){
-          if(panel.online===false)throw new Error('演示面板离线');
-          const data=demoData(panel);
-          result={added:0,updated:0,removed:0,skipped:0,unchanged:panel.clients,inbounds:data.inbounds.length,clients:panel.clients,outbounds:data.config.outbounds.length,rules:data.config.routing.rules.length};
-        }else{
-          result=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/sync`,{method:'POST'});
-        }
+        const result=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/sync`,{method:'POST'});
         display(result);
         await ctx.refresh();
       }catch(err){display(null,err.message);}
@@ -209,19 +159,14 @@
 
   function removePanel(ctx,panel) {
     if(!panel)return ctx.toast('找不到该面板','error');
-    const password=ctx.state.demo?'':field('删除密码',input('password','输入删除密码','','type="password" required autocomplete="off"'));
-    const note=ctx.state.demo?'此操作将移除当前演示中的面板。':`此操作会删除「${esc(panel.name)}」在本管理台的登记及其本地线路记录。远端 3x-ui 面板中的配置会保留。`;
+    const password=field('删除密码',input('password','输入删除密码','','type="password" required autocomplete="off"'));
+    const note=`此操作会删除「${esc(panel.name)}」在本管理台的登记及其本地线路记录。远端 3x-ui 面板中的配置会保留。`;
     const confirm=modal(ctx,'删除面板','server',`<form id="wf-form" class="wf-form"><p>${note}</p>${password}<div class="wf-inline-error" role="alert"></div></form>`,submitFooter('确认删除'));
     confirm.querySelector('[data-wf-submit]').classList.add('wf-danger');
     bindForm(confirm,async form=>{
-      if(ctx.state.demo){
-        const index=ctx.state.panels.findIndex(p=>p.id===panel.id);
-        if(index>=0)ctx.state.panels.splice(index,1);
-      }else{
-        await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}`,{method:'DELETE',body:{password:form.elements.password.value}});
-        form.elements.password.value='';
-        try{if(localStorage.getItem('nexus.line.panel')===panel.id)localStorage.removeItem('nexus.line.panel');}catch{}
-      }
+      await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}`,{method:'DELETE',body:{password:form.elements.password.value}});
+      form.elements.password.value='';
+      try{if(localStorage.getItem('nexus.line.panel')===panel.id)localStorage.removeItem('nexus.line.panel');}catch{}
       confirm.close();await ctx.refresh();ctx.toast('面板登记已删除');
     });
   }
@@ -229,49 +174,8 @@
     const ok=results.filter(x=>x.ok).length;
     modal(ctx,title,'list-checks',`<p>${results.length} 项操作，成功 ${ok} 项，失败 ${results.length-ok} 项。</p><div>${results.map(r=>`<div class="wf-result"><div class="wf-spread"><strong>${esc(r.name||r.panelId)}</strong>${badge(r.ok?'成功':'失败',r.ok?'good':'fail')}</div><p>${esc(r.message||'')}</p></div>`).join('')}</div>`, '<button class="wf-button wf-primary" data-wf-close>完成</button>');
   }
-  function demoRun(ctx,action,targets) {
-    const results=targets.map(({panelId,payload:q})=>{
-      const p=ctx.state.panels.find(x=>x.id===panelId);
-      const result={panelId,name:p?.name||panelId,ok:false};
-      try {
-        if(!p||p.online===false) throw new Error('演示面板离线');
-        const d=demoData(p);
-        const inbound=d.inbounds.find(x=>String(x.id)===String(q.inboundId));
-        if(action==='inbound.create') {
-          if(d.inbounds.some(x=>x.port===q.port)) throw new Error(`端口 ${q.port} 已占用`);
-          d.inbounds.push({id:1+Math.max(0,...d.inbounds.map(x=>x.id)),protocol:'vless',enable:true,settings:{clients:[]},...q});
-        } else if(action==='outbound.upsert') {
-          const i=d.config.outbounds.findIndex(x=>x.tag===q.outbound.tag);
-          if(i<0)d.config.outbounds.push(q.outbound);else d.config.outbounds[i]=q.outbound;
-        } else if(action==='route.upsert') {
-          if(q.index===undefined)d.config.routing.rules.push(q.rule);
-          else if(!d.config.routing.rules[q.index])throw new Error('找不到该路由规则');
-          else d.config.routing.rules[q.index]=q.rule;
-        } else {
-          if(!inbound)throw new Error('找不到该入站');
-          if(action==='inbound.expiry')inbound.expiryTime=q.expiryTime;
-          else {
-            const c=inbound.settings.clients.find(x=>x.email===q.email);
-            if(action==='client.expiry') {
-              if(!c)throw new Error('找不到该客户端');
-              c.expiryTime=q.expiryTime;
-            } else if(action==='client.create') {
-              if(d.inbounds.some(i=>i.settings.clients.some(c=>c.email===q.email)))throw new Error(`标识 ${q.email} 已使用`);
-              inbound.settings.clients.push({id:q.uuid||crypto.randomUUID(),enable:true,...q});
-            }
-          }
-        }
-        p.inbounds=d.inbounds.length;p.clients=d.inbounds.reduce((n,x)=>n+x.settings.clients.length,0);
-        result.ok=true;result.message=`${q.email||q.remark||q.outbound?.tag||q.rule?.outboundTag||inbound?.remark||''} 已更新（演示）`;
-      } catch(e){result.message=e.message;}
-      return result;
-    });
-    ctx.state.activity.unshift({id:crypto.randomUUID(),ts:Date.now(),action,results});
-    return results;
-  }
-
   async function inboundResources(ctx,panel,withClients) {
-    if(!withClients||ctx.state.demo) return resources(ctx,panel,'inbounds');
+    if(!withClients) return resources(ctx,panel,'inbounds');
     const [ins,clientResponse]=await Promise.all([resources(ctx,panel,'inbounds'),ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/clients`)]);
     const clients=list(clientResponse.clients);
     return ins.map(inbound=>({...inbound,settings:{...readSettings(inbound),clients:clients.filter(c=>list(c.inboundIds).some(id=>String(id)===String(inbound.id)))}}));
@@ -360,7 +264,7 @@
     const locked=action==='route.upsert'&&params.index!==undefined;
     const area=`<div class="wf-spread"><b>目标面板</b><label class="wf-check"><input type="checkbox" data-all>全选</label></div><div class="wf-targets">${targetRows(ctx,params.panelId,locked)}</div>`;
     const selector=chooser?field('操作类型',`<select name="action">${Object.entries(labels).filter(([k])=>k!=='backup').map(([k,v])=>`<option value="${k}" ${k===action?'selected':''}>${esc(v)}</option>`).join('')}</select>`):'';
-    const el=modal(ctx,chooser?'批量操作':labels[action],'layers',`<form id="wf-form" class="wf-form">${selector}${operationFields(action,params)}${area}${ctx.state.demo?'<div class="wf-note">当前为演示工作区，更改仅在本次演示中生效。</div>':''}<div class="wf-inline-error" role="alert"></div></form>`,submitFooter('执行操作'));
+    const el=modal(ctx,chooser?'批量操作':labels[action],'layers',`<form id="wf-form" class="wf-form">${selector}${operationFields(action,params)}${area}<div class="wf-inline-error" role="alert"></div></form>`,submitFooter('执行操作'));
     const form=el.querySelector('form');
     if (isClientExpiry) bindExpiryPicker(form);
     if(chooser)form.elements.action.onchange=e=>operation(ctx,e.target.value,{},true);
@@ -433,7 +337,7 @@
         return base.map(payload=>({panelId:c.value,payload:{...payload,...lookup}}));
       });
       if(targets.length>512)throw new Error('每次最多执行 512 项操作，请分批提交');
-      const results=ctx.state.demo?demoRun(ctx,action,targets):list((await ctx.api('/api/batch',{method:'POST',body:{action,targets}})).results);
+      const results=list((await ctx.api('/api/batch',{method:'POST',body:{action,targets}})).results);
       el.close();operationResults(ctx,labels[action],results);await ctx.refresh();
     });
   }
@@ -455,7 +359,7 @@
     return name;
   }
   function backup(ctx,panelId,immediate=false) {
-    const body=`<form id="wf-form" class="wf-form"><div class="wf-spread"><b>选择备份面板</b><label class="wf-check"><input type="checkbox" data-all>全选</label></div><div class="wf-targets">${targetRows(ctx,panelId,!!panelId)}</div><p class="wf-hint">${ctx.state.demo?'演示工作区将下载包含示例配置的 JSON 文件。':panelId?'下载此面板的原始数据库文件。':'每个面板的数据库将合并为一个 ZIP 文件，其中包含备份结果清单。'}</p><div class="wf-inline-error" role="alert"></div></form>`;
+    const body=`<form id="wf-form" class="wf-form"><div class="wf-spread"><b>选择备份面板</b><label class="wf-check"><input type="checkbox" data-all>全选</label></div><div class="wf-targets">${targetRows(ctx,panelId,!!panelId)}</div><p class="wf-hint">${panelId?'下载此面板的原始数据库文件。':'每个面板的数据库将合并为一个 ZIP 文件，其中包含备份结果清单。'}</p><div class="wf-inline-error" role="alert"></div></form>`;
     const el=modal(ctx,'下载面板备份','database',body,submitFooter('下载备份'));
     const all=el.querySelector('[data-all]'),checks=[...el.querySelectorAll('[data-target]')];
     const sync=()=>{const n=checks.filter(c=>c.checked).length;all.checked=!!n&&n===checks.length;all.indeterminate=n>0&&n<checks.length;};
@@ -467,20 +371,12 @@
       if(!ids.length||ids.length>128)throw new Error('请选择 1 至 128 个面板');
       const now=new Date();
       const stamp=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');
-      if(ctx.state.demo){
-        const records=ctx.state.panels.filter(p=>ids.includes(p.id)).map(p=>({panelId:p.id,name:p.name,ok:p.online!==false,message:p.online===false?'面板离线':'已备份演示配置',...(p.online===false?{}:{data:demoData(p)})}));
-        const results=records.map(({panelId,name,ok,message})=>({panelId,name,ok,message}));
-        ctx.state.activity.unshift({id:crypto.randomUUID(),action:'backup',ts:Date.now(),results});
-        if(records.some(r=>r.ok))saveBlob(new Blob([JSON.stringify({demo:true,panels:records},null,2)],{type:'application/json'}),`nexus-demo-${stamp}.json`);
-        el.close();operationResults(ctx,'备份结果',results);await ctx.refresh();
-      }else{
-        const res=await fetch('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({panelIds:ids,mode:panelId?'single':'archive',date:stamp})});
-        if(!res.ok)throw new Error((await res.json().catch(()=>({}))).error||`备份失败（${res.status}）`);
-        const ok=Number(res.headers.get('x-backup-success')),fail=Number(res.headers.get('x-backup-failed'));
-        const filename=downloadName(res.headers.get('Content-Disposition'));
-        saveBlob(await res.blob(),filename);
-        el.close();ctx.toast(fail?`已下载 ${ok} 个面板的备份，${fail} 个失败。详情见压缩包内清单。`:'备份已下载');await ctx.refresh();
-      }
+      const res=await fetch('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({panelIds:ids,mode:panelId?'single':'archive',date:stamp})});
+      if(!res.ok)throw new Error((await res.json().catch(()=>({}))).error||`备份失败（${res.status}）`);
+      const ok=Number(res.headers.get('x-backup-success')),fail=Number(res.headers.get('x-backup-failed'));
+      const filename=downloadName(res.headers.get('Content-Disposition'));
+      saveBlob(await res.blob(),filename);
+      el.close();ctx.toast(fail?`已下载 ${ok} 个面板的备份，${fail} 个失败。详情见压缩包内清单。`:'备份已下载');await ctx.refresh();
     });
     if(immediate)el.querySelector('form').requestSubmit();
   }
@@ -526,7 +422,7 @@
     let mode='tcp', targets=[], busy=false;
     function update() {
       if (!root.isConnected) return;
-      all.disabled=ctx.state.demo || busy || !targets.length;
+      all.disabled=busy || !targets.length;
       all.title=`测试当前筛选中的 ${targets.length} 个 SOCKS5 出站（含所有分页）`;
       for (const button of modeButtons) {
         button.disabled=busy;
@@ -535,10 +431,9 @@
       for (const cell of root.querySelectorAll('[data-test-result]')) {
         const row=rowAt(Number(cell.dataset.testResult)), result=results[mode].get(row);
         const button=cell.closest('tr').querySelector('[data-wf-row="outbound.test"]');
-        button.disabled=ctx.state.demo || busy || !row.canTest;
+        button.disabled=busy || !row.canTest;
         let reason='';
-        if (ctx.state.demo) reason='演示工作区没有真实测试结果';
-        else if (row.outbound.protocol!=='socks') reason='仅支持 SOCKS5 出站';
+        if (row.outbound.protocol!=='socks') reason='仅支持 SOCKS5 出站';
         else if (!row.canTest) reason='测试需要唯一的出站标签';
         button.title=reason || `测试 ${row.outbound.tag} 的 ${mode.toUpperCase()} 延迟`;
         button.setAttribute('aria-label',button.title);
@@ -563,7 +458,7 @@
       return list(reply?.results);
     }
     async function run(items,batch) {
-      if (busy || ctx.state.demo || !items.length) return;
+      if (busy || !items.length) return;
       busy=true;
       const byPanel=new Map(), records=results[mode];
       let done=0, failed=0;
@@ -613,10 +508,9 @@
     for (const button of modeButtons) button.onclick=()=>{
       if (busy) return;
       mode=button.dataset.testMode;
-      if (!ctx.state.demo) progress.textContent='';
+      progress.textContent='';
       update();
     };
-    if (ctx.state.demo) progress.textContent='切换至实际工作区可测试延迟';
     all.onclick=()=>run(targets,true);
     return {
       setScope(filtered) { targets=filtered.map(item=>item.r).filter(row=>row.canTest); update(); },
@@ -632,26 +526,7 @@
     bindForm(el,async()=>{
       const panel=ctx.state.panels.find(p=>p.id===select.value);
       if(!panel)throw new Error('请选择目标面板');
-      let result;
-      if(ctx.state.demo){
-        if(panel.online===false)throw new Error('演示面板离线');
-        const demo=demoData(panel);
-        result={changed:0,skipped:0};
-        if(demo.exampleLegacy && demo.config.routing.rules.includes(demo.exampleLegacy)){
-          const rule=demo.exampleLegacy;
-          const tag=rule.outboundTag;
-          if(rule.ruleTag===tag && JSON.stringify(rule.inboundTag)===JSON.stringify([tag]) && !rule.user){
-            const rules=demo.config.routing.rules;
-            rules.splice(rules.indexOf(rule),1);
-            delete rule.inboundTag;
-            rule.user=[tag];
-            rules.splice(Math.min(3,rules.length),0,rule);
-            result.changed++;
-          }
-        }
-      }else{
-        result=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/repair-user-routes`,{method:'POST'});
-      }
+      const result=await ctx.api(`/api/panels/${encodeURIComponent(panel.id)}/repair-user-routes`,{method:'POST'});
       el.close();
       operationResults(ctx,'路由修正结果',[{name:panel.name,ok:true,message:`已修正 ${result.changed} 项，跳过 ${result.skipped} 项。`}]);
       await ctx.refresh();
@@ -666,7 +541,6 @@
     activity:['操作类型','执行时间','涉及面板','执行结果','操作']
   };
   function panelAccess(ctx, panel) {
-    if (ctx.state.demo) return '<span class="wf-muted">演示面板</span>';
     let url;
     try { url = new URL(panel.url); } catch { return '—'; }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return '—';
@@ -678,7 +552,7 @@
     const panels=ctx.state.panels;
     if(page==='panels'||page==='backups')return panels.map(panel=>({panel}));
     if(page==='activity'){
-      const activity=ctx.state.demo?ctx.state.activity:(await ctx.api('/api/history')).history;
+      const activity=(await ctx.api('/api/history')).history;
       return list(activity).map(event=>({event}));
     }
     const jobs=panels.map(panel=>async()=>{
@@ -690,7 +564,7 @@
       }catch(e){onError(`${panel.name} · ${e.message}`);return [];}
     });
     const blocks=[];
-    // Keep large workspaces from issuing every upstream request at once.
+    // Limit concurrent requests to upstream panels.
     for(let i=0;i<jobs.length;i+=6)blocks.push(...await Promise.all(jobs.slice(i,i+6).map(run=>run())));
     return blocks.flat();
   }
@@ -728,17 +602,16 @@
   }
   function render(page,host,ctx){
     if(page==='clients'){
-      window.Clients.render(host,ctx,{open,modal,bindForm,submitFooter,operationResults,demoData});
+      window.Clients.render(host,ctx,{open,modal,bindForm,submitFooter,operationResults});
       return;
     }
     const info=pages[page];
     if(!info)return;
     const [title,subtitle,unit,icon,actionText,action]=info;
-    const workspace=ctx.state.demo?'演示工作区':'实际工作区';
     const extraAction=page==='inbounds'?'inbound.expiry':page==='clients'?'client.expiry':null;
     const scoped=['inbounds','clients','outbounds','routes'].includes(page);
     const headingBtns=`${page==='routes'?button(ctx,'修正旧版线路路由','repair-routes','route'):''}${extraAction?button(ctx,'批量改期',extraAction,'calendar-days'):''}${action?button(ctx,page==='backups'?'一键备份全部':actionText,page==='backups'?'download-all':action,page==='backups'?'download':'plus',true):''}`;
-    host.innerHTML=`<div class="wf-page"><div class="wf-heading"><div><h1>${esc(title)}</h1><p>${esc(workspace)} · ${ctx.state.panels.length} 个面板</p></div><div class="wf-actions">${headingBtns}</div></div><div class="wf-banners" role="status"></div><section class="wf-surface"><div class="wf-subhead"><div class="wf-row"><h2>${esc(subtitle)}</h2><span class="wf-count" data-count></span></div>${page==='backups'?button(ctx,'选择面板','backup','list-checks'):''}</div>${page==='backups'?`<div class="wf-backup-help">${ctx.icon('database')}<div><b>${ctx.state.demo?'演示配置快照':'3x-ui 数据库备份'}</b><p>${ctx.state.demo?'JSON · 示例工作区':'单个面板下载数据库，多选或全部备份下载 ZIP 压缩包。'}</p></div></div>`:''}<div class="wf-toolbar"><label class="wf-search">${ctx.icon('search',15)}<input data-search type="search" placeholder="搜索${esc(unit)}" aria-label="搜索${esc(unit)}"></label>${scoped?`<select class="wf-select" data-filter aria-label="按面板筛选"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>`:''}</div><div data-list class="wf-loading">正在读取…</div><div data-pages></div></section></div>`;
+    host.innerHTML=`<div class="wf-page"><div class="wf-heading"><div><h1>${esc(title)}</h1><p>${ctx.state.panels.length} 个面板</p></div><div class="wf-actions">${headingBtns}</div></div><div class="wf-banners" role="status"></div><section class="wf-surface"><div class="wf-subhead"><div class="wf-row"><h2>${esc(subtitle)}</h2><span class="wf-count" data-count></span></div>${page==='backups'?button(ctx,'选择面板','backup','list-checks'):''}</div>${page==='backups'?`<div class="wf-backup-help">${ctx.icon('database')}<div><b>3x-ui 数据库备份</b><p>单个面板下载数据库，多选或全部备份下载 ZIP 压缩包。</p></div></div>`:''}<div class="wf-toolbar"><label class="wf-search">${ctx.icon('search',15)}<input data-search type="search" placeholder="搜索${esc(unit)}" aria-label="搜索${esc(unit)}"></label>${scoped?`<select class="wf-select" data-filter aria-label="按面板筛选"><option value="">全部面板</option>${ctx.state.panels.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>`:''}</div><div data-list class="wf-loading">正在读取…</div><div data-pages></div></section></div>`;
     const root=host.querySelector('.wf-page'),listRoot=root.querySelector('[data-list]'),pag=root.querySelector('[data-pages]');
     let rows=[],slice=0,ready=false;
     let tests;

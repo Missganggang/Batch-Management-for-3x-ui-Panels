@@ -52,6 +52,10 @@
 .ln-search{display:flex;align-items:center;gap:7px;border:1px solid #e2e2eb;border-radius:6px;padding:6px 9px;color:#969aac}
 .ln-search input{border:0;min-width:0;width:120px;background:transparent;font-size:12px}
 .ln-table-wrap{overflow-x:auto}
+.ln-pager,.ln-pager>div{display:flex;align-items:center;gap:8px}
+.ln-pager{flex-wrap:wrap;justify-content:space-between;padding:12px 18px;border-top:1px solid #ececf3;color:#666d80;font-size:12px;font-variant-numeric:tabular-nums}
+.ln-pager[hidden]{display:none}
+.ln-pager .nx-button{width:32px;height:32px;padding:0;justify-content:center}
 .ln-list table{width:100%;border-collapse:collapse;text-align:left;font-size:12px}
 .ln-list th{background:#f8f9fc;color:#7a8193;font-weight:550;font-size:11px}
 .ln-list th,.ln-list td{padding:11px 12px;border-bottom:1px solid #ececf3}

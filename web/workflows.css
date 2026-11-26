@@ -67,6 +67,9 @@
 .wf-form textarea.wf-code {font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;color:#434270;background:#fafaff}
 .wf-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .wf-field small,.wf-hint {font-size:12px;color:var(--wf-muted);font-weight:400}
+.wf-expiry-editor details {margin-top:6px;font-size:13px}
+.wf-expiry-editor summary {width:fit-content;color:var(--wf-accent);cursor:pointer}
+.wf-expiry-editor details input {margin-top:6px}
 .wf-dialog-foot {position:sticky;bottom:0;padding:14px 23px;background:#fbfbfd;justify-content:flex-end;border-top:1px solid var(--wf-line);z-index:1}
 .wf-options {display:flex;align-items:center;gap:12px}
 .wf-check {display:inline-flex;align-items:center;gap:7px;font-size:13px;cursor:pointer}

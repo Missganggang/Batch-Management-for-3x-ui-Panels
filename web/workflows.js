@@ -263,13 +263,35 @@
     outbound:{tag:'direct-custom',protocol:'freedom',settings:{}},
     rule:{type:'field',user:['用户名'],outboundTag:'用户名'}
   };
-  function expiryField(value) {
-    const d=Number(value)>0?new Date(Number(value)):null;
-    const local=d?new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16):'';
-    return field('到期时间',input('expiry','',local,'type="datetime-local"'),'使用当前设备时区，留空为永久有效。');
+  function localDateTime(value) {
+    if (!(Number(value)>0)) return '';
+    const d=new Date(Number(value));
+    return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,19);
+  }
+  function expiryField(value,allowPaste) {
+    const local=localDateTime(value);
+    if (!allowPaste) return field('到期时间',input('expiry','',local.slice(0,16),'type="datetime-local"'),'使用当前设备时区，留空为永久有效。');
+    const typed=input('expiry','2027-04-22 12:36:10',local.replace('T',' '),'autocomplete="off" spellcheck="false"');
+    const picker=input('expiryPicker','',local,'type="datetime-local" step="1" aria-label="从日历选择到期时间" disabled');
+    return `<div class="wf-expiry-editor">${field('到期时间',typed,'也可粘贴 2026/12/4 18:01:13。按当前设备时区计算，留空为永久有效。')}
+      <details><summary>从日历选择</summary>${picker}</details></div>`;
+  }
+  function bindExpiryPicker(form) {
+    const {expiry,expiryPicker}=form.elements;
+    const details=expiryPicker.closest('details');
+    details.ontoggle=()=>{expiryPicker.disabled=!details.open;};
+    expiry.oninput=()=>{
+      try { expiryPicker.value=localDateTime(window.Lines.parseLocalExpiry(expiry)); }
+      catch { expiryPicker.value=''; }
+    };
+    expiryPicker.oninput=()=>{
+      if (expiryPicker.validity.badInput) return;
+      const value=expiryPicker.value.replace('T',' ');
+      expiry.value=value.length===16?value+':00':value;
+    };
   }
   function operationFields(action,params) {
-    const expiry=expiryField(params.client?.expiryTime??params.inbound?.expiryTime);
+    const expiry=expiryField(params.client?.expiryTime??params.inbound?.expiryTime,action==='client.expiry');
     if(action==='inbound.create')return `<div class="wf-grid">${field('入站名称',input('remark','例如 HK-Reality','','required maxlength="100"'))}${field('监听端口',input('ports','443, 8443','443','required'),'多个端口以逗号分隔。')}</div><div class="wf-grid">${field('Reality 服务名称（SNI）',input('serverName','www.example.com','','required spellcheck="false"'))}${field('目标地址（可选）',input('dest','SNI:443','','spellcheck="false"'))}</div>${expiry}<p class="wf-hint">VLESS · TCP · Reality，密钥由各目标面板独立生成。</p>`;
     if(action==='client.create')return `${field('客户端标识','<textarea name="emails" required placeholder="alice&#10;bob" spellcheck="false"></textarea>','每行一个，在每个选中面板上创建。')}${field('Flow','<select name="flow"><option value="xtls-rprx-vision">xtls-rprx-vision</option><option value="">无</option></select>')}${expiry}`;
     if(action.endsWith('.expiry'))return expiry+(action==='client.expiry'?'<p class="wf-hint">同一客户端的到期时间会应用到该面板上它关联的全部入站。</p>':'');
@@ -281,7 +303,8 @@
   }
   function getOpInputs(form,action,params) {
     const val=n=>form.elements.namedItem(n)?.value.trim()||'';
-    const expires=val('expiry')?new Date(val('expiry')).getTime():0;
+    const expires=action==='client.expiry' ? window.Lines.parseLocalExpiry(form.elements.expiry)
+      : (val('expiry') ? new Date(val('expiry')).getTime() : 0);
     if(!Number.isFinite(expires))throw new Error('到期时间格式无效');
     if(action==='inbound.create'){
       const ports=val('ports').split(/[\s,，]+/).filter(Boolean).map(s=>/^\d+$/.test(s)?Number(s):NaN);
@@ -318,6 +341,7 @@
     const selector=chooser?field('操作类型',`<select name="action">${Object.entries(labels).filter(([k])=>k!=='backup').map(([k,v])=>`<option value="${k}" ${k===action?'selected':''}>${esc(v)}</option>`).join('')}</select>`):'';
     const el=modal(ctx,chooser?'批量操作':labels[action],'layers',`<form id="wf-form" class="wf-form">${selector}${operationFields(action,params)}${area}${ctx.state.demo?'<div class="wf-note">当前为演示工作区，更改仅在本次演示中生效。</div>':''}<div class="wf-inline-error" role="alert"></div></form>`,submitFooter('执行操作'));
     const form=el.querySelector('form');
+    if (isClientExpiry) bindExpiryPicker(form);
     if(chooser)form.elements.action.onchange=e=>operation(ctx,e.target.value,{},true);
     const checks=[...form.querySelectorAll('[data-target]')],all=form.querySelector('[data-all]');
     const loads=new Map();

@@ -2,6 +2,7 @@ mod batch;
 mod clients;
 mod lines;
 mod outbounds;
+mod panel_transfer;
 mod server;
 mod storage;
 mod sync;
@@ -108,7 +109,9 @@ async fn main() -> Result<()> {
         .route("/api/panels", get(list_panels).post(add_panel))
         .route(
             "/api/panels/:id",
-            delete(remove_panel).layer(Extension(access.clone())),
+            delete(remove_panel)
+                .put(edit_panel)
+                .layer(Extension(access.clone())),
         )
         .route("/api/panels/:id/sync", post(sync_panel))
         .route("/api/panels/:id/note", post(update_panel_note))
@@ -142,6 +145,11 @@ async fn main() -> Result<()> {
         .route("/api/history", get(history))
         .route("/api/batch", post(batch::execute))
         .route("/api/backup", post(batch::backup))
+        .route("/api/panel-transfer/export", post(panel_transfer::export))
+        .route(
+            "/api/panel-transfer/restore",
+            post(panel_transfer::restore).layer(DefaultBodyLimit::max(4 * 1024 * 1024 + 16 * 1024)),
+        )
         .fallback(get(asset))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(access, server::guard))
@@ -189,49 +197,99 @@ async fn asset(uri: Uri) -> Response {
 async fn list_panels(State(app): State<Shared>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"panels":storage::panels(&app.db).await?})))
 }
-#[derive(Deserialize)]
-struct AddPanel {
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PanelForm {
+    #[serde(default)]
     name: String,
     url: String,
+    #[serde(default)]
     token: String,
     #[serde(default)]
     region: String,
-    #[serde(default, rename = "publicHost")]
+    #[serde(default)]
     public_host: String,
     #[serde(default)]
     note: String,
     #[serde(default)]
+    owner: String,
+}
+
+impl PanelForm {
+    fn normalize(&mut self, saved_base: Option<&str>) -> ApiResult<reqwest::Url> {
+        let mut url = reqwest::Url::parse(self.url.trim())
+            .map_err(|_| ApiError::bad("请输入有效的面板地址"))?;
+        if !matches!(url.scheme(), "https" | "http")
+            || url.host().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || self.url.len() > 2048
+        {
+            return Err(ApiError::bad(
+                "请输入包含面板 Web 基础路径的 HTTP 或 HTTPS 地址",
+            ));
+        }
+        if Some(url.as_str().trim_end_matches('/')) != saved_base {
+            let path = url.path().trim_end_matches('/');
+            let path = path
+                .strip_suffix("/panel/api")
+                .or_else(|| path.strip_suffix("/panel"))
+                .unwrap_or(path)
+                .to_owned();
+            url.set_path(&path);
+        }
+        self.url = url.as_str().trim_end_matches('/').to_owned();
+        self.name = self.name.trim().to_owned();
+        if self.name.is_empty() {
+            self.name = url.host_str().expect("validated host").to_owned();
+        }
+        self.region = self.region.trim().to_owned();
+        self.owner = self.owner.trim().to_owned();
+        self.token = self.token.trim().to_owned();
+        self.public_host = lines::public_host(&self.public_host)?;
+        self.note = panel_note(&self.note)?.to_owned();
+        if [self.name.as_str(), &self.region, &self.owner]
+            .iter()
+            .any(|s| s.chars().count() > 80)
+        {
+            return Err(ApiError::bad(
+                "面板名称、地区和服务器归属最多可填写 80 个字符",
+            ));
+        }
+        if self.token.len() > 8192 {
+            return Err(ApiError::bad("API 令牌过长"));
+        }
+        Ok(url)
+    }
+}
+
+#[derive(Deserialize)]
+struct AddPanel {
+    #[serde(flatten)]
+    form: PanelForm,
+    #[serde(default)]
     sync: bool,
 }
+
+async fn verify_panel(app: &App, panel: &Panel) -> ApiResult<()> {
+    let api = panel
+        .api(&app.client)
+        .map_err(|e| ApiError::bad(e.to_string()))?;
+    let _slot = app.upstream_slots.acquire().await.expect("open semaphore");
+    api.inbounds().await.map_err(ApiError::upstream)?;
+    Ok(())
+}
+
 async fn add_panel(
     State(app): State<Shared>,
-    Json(p): Json<AddPanel>,
+    Json(mut p): Json<AddPanel>,
 ) -> ApiResult<impl IntoResponse> {
-    let (name, region, token) = (p.name.trim(), p.region.trim(), p.token.trim());
-    let public_host = lines::public_host(&p.public_host)?;
-    let note = panel_note(&p.note)?;
-    if name.is_empty()
-        || name.chars().count() > 80
-        || region.chars().count() > 80
-        || token.len() > 8192
-        || p.url.len() > 2048
-    {
-        return Err(ApiError::bad("请检查面板名称、地区、地址或令牌长度"));
-    }
-    let parsed =
-        reqwest::Url::parse(p.url.trim()).map_err(|_| ApiError::bad("请输入有效的面板地址"))?;
-    let raw_url = parsed.as_str().trim_end_matches('/');
-    let url = raw_url
-        .strip_suffix("/panel/api")
-        .or_else(|| raw_url.strip_suffix("/panel"))
-        .unwrap_or(raw_url);
-    let api = PanelApi::new(app.client.clone(), p.url.trim(), token)
-        .map_err(|e| ApiError::bad(e.to_string()))?;
-    {
-        let _slot = app.upstream_slots.acquire().await.expect("open semaphore");
-        api.inbounds().await.map_err(ApiError::upstream)?;
-    }
-    let panel = storage::insert_panel(&app.db, name, url, region, token, &public_host, note)
+    p.form.normalize(None)?;
+    let panel = Panel::from_form(p.form, None).map_err(|e| ApiError::bad(e.to_string()))?;
+    verify_panel(&app, &panel).await?;
+    storage::insert_panel(&app.db, &panel)
         .await
         .map_err(|e| ApiError::bad(e.to_string()))?;
     let mut result = json!({"panel":panel});
@@ -243,6 +301,60 @@ async fn add_panel(
     }
     Ok((StatusCode::CREATED, Json(result)))
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditPanel {
+    expected_revision: i64,
+    #[serde(flatten)]
+    form: PanelForm,
+}
+
+async fn edit_panel(
+    State(app): State<Shared>,
+    Path(id): Path<String>,
+    Json(mut input): Json<EditPanel>,
+) -> ApiResult<Json<Value>> {
+    let _guard = app.lock(&id).await;
+    let old = app.panel(&id).await?;
+    let url = input.form.normalize(Some(&old.url))?;
+    let conflict = || {
+        ApiError(
+            StatusCode::CONFLICT,
+            "面板资料已变更，请刷新后再编辑".into(),
+        )
+    };
+    if old.revision != input.expected_revision {
+        return Err(conflict());
+    }
+    let has_token = !input.form.token.is_empty();
+    if !has_token
+        && reqwest::Url::parse(&old.url)
+            .context("已保存的面板地址无效")?
+            .origin()
+            != url.origin()
+    {
+        return Err(ApiError::bad(
+            "更改面板域名、协议或端口时，请填写目标面板的 API 令牌",
+        ));
+    }
+    let candidate = Panel::from_form(input.form, Some(&old))?;
+    if has_token || candidate.url != old.url {
+        verify_panel(&app, &candidate).await?;
+    }
+    let mut tx = app.db.begin().await.context("无法更新面板资料")?;
+    if !storage::update_panel(&mut tx, &candidate, old.revision)
+        .await
+        .map_err(|e| ApiError::bad(e.to_string()))?
+    {
+        return Err(conflict());
+    }
+    if sync::sharing_host(&old)? != sync::sharing_host(&candidate)? {
+        lines::update_share_links(&mut tx, &candidate).await?;
+    }
+    tx.commit().await.context("无法保存面板资料")?;
+    Ok(Json(json!({"panel":candidate})))
+}
+
 async fn sync_panel(State(app): State<Shared>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(sync::run(&app, &id).await?))
 }
@@ -268,22 +380,25 @@ async fn update_panel_note(
     Json(input): Json<PanelNote>,
 ) -> ApiResult<Json<Value>> {
     let note = panel_note(&input.note)?;
-    let update = sqlx::query("UPDATE panels SET note=? WHERE id=? AND note IN (?,?)")
-        .bind(note)
-        .bind(&id)
-        .bind(&input.expected_note)
-        .bind(note)
-        .execute(&app.db)
-        .await
-        .context("保存面板备注失败")?;
+    let update = sqlx::query(
+        "UPDATE panels SET revision=revision+(note<>?), note=? WHERE id=? AND note IN (?,?)",
+    )
+    .bind(note)
+    .bind(note)
+    .bind(&id)
+    .bind(&input.expected_note)
+    .bind(note)
+    .execute(&app.db)
+    .await
+    .context("保存面板备注失败")?;
+    let panel = app.panel(&id).await?;
     if update.rows_affected() == 0 {
-        app.panel(&id).await?;
         return Err(ApiError(
             StatusCode::CONFLICT,
             "面板备注已变更，请刷新后再编辑".into(),
         ));
     }
-    Ok(Json(json!({"note":note})))
+    Ok(Json(json!({"note":panel.note,"panel":panel})))
 }
 
 #[derive(Deserialize)]
@@ -320,6 +435,7 @@ async fn resource(
     let body = match resource.as_str() {
         "inbounds" => json!({"inbounds":api.inbounds().await.map_err(ApiError::upstream)?}),
         "clients" => json!({"clients":api.clients().await.map_err(ApiError::upstream)?}),
+        "client-count" => json!({"count":api.clients().await.map_err(ApiError::upstream)?.len()}),
         "online-clients" => {
             json!({"emails":api.online_clients().await.map_err(ApiError::upstream)?})
         }

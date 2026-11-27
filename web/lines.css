@@ -35,7 +35,7 @@
 .ln-months label span{display:block;padding:6px 9px;border-radius:4px;font-size:12px;line-height:16px;color:#74798a}
 .ln-months input:checked+span{background:#e9e3fc;color:#6449bf;font-weight:650;box-shadow:inset 0 0 0 1px #d7cef4}
 .ln-months input:focus-visible+span{outline:2px solid #967be1;outline-offset:2px}
-.ln-panel-select{flex:1;min-width:0;max-width:330px}
+.ln-panel-select{flex:1;min-width:0;max-width:560px}
 .ln-panel-select select:disabled{background:#f8f8fa;color:#888b9e}
 .ln-submit{margin-left:auto;min-height:39px;min-width:110px}
 .ln-panel-support{display:flex;gap:14px;margin-top:12px}

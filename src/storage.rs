@@ -134,6 +134,20 @@ pub async fn open(dir: &Path) -> Result<SqlitePool> {
             .execute(&mut *tx)
             .await?;
     }
+    let panel_columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('panels')")
+            .fetch_all(&mut *tx)
+            .await?;
+    if !panel_columns.iter().any(|col| col == "owner") {
+        sqlx::query("ALTER TABLE panels ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *tx)
+            .await?;
+    }
+    if !panel_columns.iter().any(|col| col == "revision") {
+        sqlx::query("ALTER TABLE panels ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(db)
 }
@@ -145,6 +159,8 @@ pub struct Panel {
     pub note: String,
     pub url: String,
     pub region: String,
+    pub owner: String,
+    pub revision: i64,
     #[serde(rename = "publicHost")]
     pub public_host: String,
     #[serde(skip)]
@@ -152,10 +168,30 @@ pub struct Panel {
 }
 
 impl Panel {
+    pub fn from_form(form: crate::PanelForm, previous: Option<&Panel>) -> Result<Self> {
+        let secret = if form.token.is_empty() {
+            previous.context("请输入 API 令牌")?.secret.clone()
+        } else {
+            protect(form.token.as_bytes(), true)?
+        };
+        Ok(Self {
+            id: previous.map_or_else(|| Uuid::new_v4().to_string(), |p| p.id.clone()),
+            revision: previous.map_or(0, |p| p.revision + 1),
+            name: form.name,
+            note: form.note,
+            url: form.url,
+            region: form.region,
+            owner: form.owner,
+            public_host: form.public_host,
+            secret,
+        })
+    }
+
     pub fn api(&self, client: &reqwest::Client) -> Result<crate::upstream::PanelApi> {
         let token =
             String::from_utf8(protect(&self.secret, false)?).context("不能读取本机保存的令牌")?;
-        crate::upstream::PanelApi::new(client.clone(), &self.url, &token)
+        let api_url = format!("{}/panel/api", self.url.trim_end_matches('/'));
+        crate::upstream::PanelApi::new(client.clone(), &api_url, &token)
     }
 }
 
@@ -171,32 +207,17 @@ pub async fn panels(db: &SqlitePool) -> Result<Vec<Panel>> {
             note: r.get("note"),
             url: r.get("url"),
             region: r.get("region"),
+            owner: r.get("owner"),
+            revision: r.get("revision"),
             public_host: r.get("public_host"),
             secret: r.get("token"),
         })
         .collect())
 }
 
-pub async fn insert_panel(
-    db: &SqlitePool,
-    name: &str,
-    url: &str,
-    region: &str,
-    token: &str,
-    public_host: &str,
-    note: &str,
-) -> Result<Panel> {
-    let p = Panel {
-        id: Uuid::new_v4().to_string(),
-        name: name.into(),
-        note: note.into(),
-        url: url.into(),
-        region: region.into(),
-        public_host: public_host.into(),
-        secret: protect(token.as_bytes(), true)?,
-    };
+pub async fn insert_panel(db: &SqlitePool, p: &Panel) -> Result<()> {
     sqlx::query(
-        "INSERT INTO panels(id,name,url,region,token,public_host,note) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO panels(id,name,url,region,token,public_host,note,owner) VALUES(?,?,?,?,?,?,?,?)",
     )
     .bind(&p.id)
     .bind(&p.name)
@@ -205,22 +226,37 @@ pub async fn insert_panel(
     .bind(&p.secret)
     .bind(&p.public_host)
     .bind(&p.note)
+    .bind(&p.owner)
     .execute(db)
     .await
-    .map_err(|e| {
-        if e.as_database_error()
-            .is_some_and(|d| d.is_unique_violation())
-        {
-            anyhow!("此面板地址已接入")
-        } else {
-            anyhow!(e)
-        }
-    })?;
-    Ok(p)
+    .map_err(panel_write_error)?;
+    Ok(())
+}
+
+pub async fn update_panel(
+    tx: &mut sqlx::SqliteConnection,
+    p: &Panel,
+    expected: i64,
+) -> Result<bool> {
+    let changed = sqlx::query("UPDATE panels SET name=?,url=?,region=?,token=?,public_host=?,note=?,owner=?,revision=? WHERE id=? AND revision=?")
+        .bind(&p.name).bind(&p.url).bind(&p.region).bind(&p.secret).bind(&p.public_host)
+        .bind(&p.note).bind(&p.owner).bind(p.revision).bind(&p.id).bind(expected)
+        .execute(tx).await.map_err(panel_write_error)?;
+    Ok(changed.rows_affected() == 1)
+}
+
+fn panel_write_error(e: sqlx::Error) -> anyhow::Error {
+    if e.as_database_error()
+        .is_some_and(|d| d.is_unique_violation())
+    {
+        anyhow!("此面板地址已接入")
+    } else {
+        anyhow!(e)
+    }
 }
 
 #[cfg(windows)]
-fn protect(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>> {
+pub(crate) fn protect(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -266,7 +302,7 @@ fn protect(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-fn protect(bytes: &[u8], _encrypt: bool) -> Result<Vec<u8>> {
+pub(crate) fn protect(bytes: &[u8], _encrypt: bool) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 

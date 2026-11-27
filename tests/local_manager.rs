@@ -47,6 +47,123 @@ fn start_manager(dir: &std::path::Path) -> Result<(Service, String)> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn editing_panels_preserves_credentials_and_updates_share_links_atomically() -> Result<()> {
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let auth = calls.clone();
+    let router = Router::new().route(
+        "/custom/panel/panel/api/inbounds/list",
+        get(move |headers: HeaderMap| {
+            let auth = auth.clone();
+            async move {
+                let bearer = headers["authorization"].to_str().unwrap().to_owned();
+                let ok = bearer == "Bearer initial" || bearer == "Bearer rotated";
+                auth.lock().await.push(bearer);
+                Json(json!({"success":ok,"obj":[],"msg":"invalid credentials"}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let url = format!("http://127.0.0.1:{port}/custom/panel");
+    let other_origin = format!("http://localhost:{port}/custom/panel");
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let dir = tempfile::tempdir()?;
+    let (_service, base) = start_manager(dir.path())?;
+    let http = reqwest::Client::builder().no_proxy().build()?;
+    let registered: Value = http
+        .post(format!("{base}/api/panels"))
+        .json(&json!({"url":format!("{url}/panel/api"),"token":"initial","owner":"供应方 A"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let panel = &registered["panel"];
+    let id = panel["id"].as_str().context("id")?;
+    assert_eq!(panel["owner"], "供应方 A");
+    assert_eq!(panel["name"], "127.0.0.1");
+    assert_eq!(panel["url"], url);
+    assert!(!registered.to_string().contains("initial"));
+    let edit_url = format!("{base}/api/panels/{id}");
+    let db = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("nexus.sqlite")),
+    )
+    .await?;
+    sqlx::query("INSERT INTO lines(id,panel_id,name,uuid,status,expiry,updated,link) VALUES('line',?,'fixture','fixture','active',0,0,'vless://user@127.0.0.1:8443?security=reality#example')")
+        .bind(id).execute(&db).await?;
+    let mut form = json!({"expectedRevision":0,"owner":"供应方 B","url":url,"name":"新名称","publicHost":"node.example","region":"香港","note":"备注"});
+    let updated: Value = http
+        .put(&edit_url)
+        .json(&form)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(updated["panel"]["owner"], "供应方 B");
+    assert_eq!(updated["panel"]["revision"], 1);
+    assert_eq!(
+        http.put(&edit_url).json(&form).send().await?.status(),
+        StatusCode::CONFLICT
+    );
+    let link: String = sqlx::query_scalar("SELECT link FROM lines WHERE id='line'")
+        .fetch_one(&db)
+        .await?;
+    assert_eq!(
+        link,
+        "vless://user@node.example:8443?security=reality#example"
+    );
+    form["expectedRevision"] = json!(1);
+    form["url"] = json!(format!("{other_origin}/panel/api"));
+    assert_eq!(
+        http.put(&edit_url).json(&form).send().await?.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(calls.lock().await.as_slice(), ["Bearer initial"]);
+    form["token"] = json!("wrong");
+    assert_eq!(
+        http.put(&edit_url).json(&form).send().await?.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    let old: Value = http
+        .get(format!("{base}/api/panels"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(old["panels"][0]["url"], url);
+    assert_eq!(old["panels"][0]["revision"], 1);
+    form["token"] = json!("rotated");
+    form["publicHost"] = json!("");
+    let saved: Value = http
+        .put(&edit_url)
+        .json(&form)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(saved["panel"]["url"], other_origin);
+    assert!(!saved.to_string().contains("rotated"));
+    let link: String = sqlx::query_scalar("SELECT link FROM lines WHERE id='line'")
+        .fetch_one(&db)
+        .await?;
+    assert_eq!(link, "vless://user@localhost:8443?security=reality#example");
+    http.get(format!("{edit_url}/inbounds"))
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        calls.lock().await.last().map(String::as_str),
+        Some("Bearer rotated")
+    );
+    db.close().await;
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mixed_batch_and_partial_backup_are_attributed_to_the_correct_targets() -> Result<()> {
     let fixture_dir = tempfile::tempdir()?;
     let fixture_path = fixture_dir.path().join("panel.db");

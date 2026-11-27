@@ -969,6 +969,7 @@ dependencies = [
  "png",
  "qrcode",
  "reqwest",
+ "ring",
  "rust_xlsxwriter",
  "serde",
  "serde_json",
@@ -980,6 +981,7 @@ dependencies = [
  "tokio-util",
  "uuid",
  "windows-sys 0.61.2",
+ "zeroize",
  "zip",
 ]
 

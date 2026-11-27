@@ -78,28 +78,12 @@ pub async fn change_host(
 ) -> ApiResult<Json<Value>> {
     let host = public_host(&input.public_host)?;
     let _guard = app.lock(&id).await;
-    let panel = app.panel(&id).await?;
-    let fallback = Url::parse(&panel.url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .unwrap_or_default();
-    let use_host = if host.is_empty() { &fallback } else { &host };
+    let mut panel = app.panel(&id).await?;
+    panel.public_host = host.clone();
     let mut tx = app.db.begin().await.context("无法更新连接地址")?;
-    let rows = sqlx::query("SELECT id,link FROM lines WHERE panel_id=? AND link IS NOT NULL")
-        .bind(&id)
-        .fetch_all(&mut *tx)
-        .await
-        .context("无法读取线路")?;
-    for row in rows {
-        let link = with_host(row.get("link"), use_host)?;
-        sqlx::query("UPDATE lines SET link=? WHERE id=?")
-            .bind(link)
-            .bind(row.get::<String, _>("id"))
-            .execute(&mut *tx)
-            .await
-            .context("无法更新分享链接")?;
-    }
-    sqlx::query("UPDATE panels SET public_host=? WHERE id=?")
+    update_share_links(&mut tx, &panel).await?;
+    sqlx::query("UPDATE panels SET revision=revision+(public_host<>?), public_host=? WHERE id=?")
+        .bind(&host)
         .bind(&host)
         .bind(&id)
         .execute(&mut *tx)
@@ -107,6 +91,28 @@ pub async fn change_host(
         .context("无法保存连接地址")?;
     tx.commit().await.context("无法保存连接地址")?;
     Ok(Json(json!({"ok":true,"publicHost":host})))
+}
+
+pub(crate) async fn update_share_links(
+    tx: &mut sqlx::SqliteConnection,
+    panel: &storage::Panel,
+) -> Result<()> {
+    let host = crate::sync::sharing_host(panel)?;
+    let rows = sqlx::query("SELECT id,link FROM lines WHERE panel_id=? AND link IS NOT NULL")
+        .bind(&panel.id)
+        .fetch_all(&mut *tx)
+        .await
+        .context("无法读取线路")?;
+    for row in rows {
+        let link = with_host(row.get("link"), &host)?;
+        sqlx::query("UPDATE lines SET link=? WHERE id=?")
+            .bind(link)
+            .bind(row.get::<String, _>("id"))
+            .execute(&mut *tx)
+            .await
+            .context("无法更新分享链接")?;
+    }
+    Ok(())
 }
 
 const SELECT_LINES: &str =
@@ -507,7 +513,14 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
     .buffer_unordered(6)
     .collect()
     .await;
+    let mut client_counts = HashMap::new();
     for (pid, data) in stats {
+        let count = data
+            .as_ref()
+            .ok()
+            .and_then(|(clients, _, _)| clients.as_ref().ok())
+            .map(Vec::len);
+        client_counts.insert(pid.clone(), count);
         let mut error =
             |e: anyhow::Error| errors.push(json!({"panelId":pid,"message":format!("{e:#}")}));
         let (clients, online, inbound_states) = match data {
@@ -570,7 +583,9 @@ pub async fn list(State(app): State<Shared>) -> ApiResult<Json<Value>> {
             }
         }
     }
-    Ok(Json(json!({"lines":output,"errors":errors})))
+    Ok(Json(
+        json!({"lines":output,"errors":errors,"clientCounts":client_counts}),
+    ))
 }
 
 #[derive(Deserialize)]

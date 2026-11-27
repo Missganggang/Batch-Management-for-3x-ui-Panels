@@ -104,6 +104,7 @@
     return Number((Number(n)/1024**i).toFixed(i?1:0))+' '+['B','KB','MB','GB','TB','PB'][i];
   }
   const linesPerPage = 12;
+  const targetPlaceholder = '请选择目标面板 · 地区 · 客户端';
   let page=null;
   function dialog(title,body,ctx) {
     document.querySelector('dialog.ln-dialog[open]')?.close();
@@ -183,7 +184,7 @@
       '<button type="button" class="nx-button" data-line-prev aria-label="上一页">'+icon('chevron-left',14)+'</button>' +
       '<span data-line-page aria-live="polite"></span><button type="button" class="nx-button" data-line-next aria-label="下一页">'+icon('chevron-right',14)+'</button></div></nav></section>';
     host.replaceChildren(root);
-    const model={root,ctx,panels:[],lines:[],listPage:1,errors:[],request:0,ready:false,creating:false,refreshing:false};
+    const model={root,ctx,panels:[],lines:[],clientCounts:new Map(),lineCounts:null,listPage:1,errors:[],request:0,ready:false,creating:false,refreshing:false};
     const form=root.querySelector('form'),btn=form.querySelector('[type=submit]'),panelChoice=form.elements.panelId;
     const readLimits = bindLimits(form);
     root.querySelector('[data-batch]').onclick=()=>batchCreate(model);
@@ -255,11 +256,47 @@
       button.title=target?'':'请先选择目标面板';
     }
   }
+  function updateTargetLabels(model) {
+    const labels=new Map();
+    for(const panel of model.panels){
+      const count=model.clientCounts.get(panel.id);
+      const clients=count===undefined?'客户端数读取中':Number.isInteger(count)?`${count} 个客户端`:'客户端数未知';
+      const lines=model.lineCounts?`${model.lineCounts.get(panel.id) || 0} 条已登记线路`:'已登记线路数未知';
+      labels.set(panel.id,`${panel.name} · ${panel.region?.trim() || '未设置地区'} · ${clients} · ${lines}`);
+    }
+    const targets=[model.root.querySelector('.ln-form [name=panelId]'),document.querySelector('.ln-batch-dialog[open] [name=panelId]')];
+    for(const select of targets){
+      if(!select)continue;
+      for(const option of select.options){
+        const label=labels.get(option.value);
+        if(label && option.textContent!==label)option.textContent=label;
+      }
+    }
+  }
+  async function loadMissingClientCounts(model,request) {
+    const missing=model.panels.filter(panel=>!model.clientCounts.has(panel.id));
+    if(!missing.length)return;
+    const controller=new AbortController();
+    model.countController=controller;
+    for(let i=0;i<missing.length;i+=6){
+      if(controller.signal.aborted || !model.root.isConnected)return;
+      await Promise.all(missing.slice(i,i+6).map(async panel=>{
+        let count=null;
+        try {
+          const result=await model.ctx.api('/api/panels/'+encodeURIComponent(panel.id)+'/client-count',{signal:controller.signal});
+          if(Number.isSafeInteger(result.count) && result.count>=0)count=result.count;
+        } catch {}
+        if(model.request!==request || !model.root.isConnected)return;
+        model.clientCounts.set(panel.id,count);
+        updateTargetLabels(model);
+      }));
+    }
+  }
   function updatePanels(model) {
     const form=model.root.querySelector('.ln-form');
     const filter=model.root.querySelector('[data-line-panel-filter]');
     const previousFilter=filter.value;
-    for(const [select,placeholder] of [[form.elements.panelId,'请选择目标面板'],[filter,'全部面板']]){
+    for(const [select,placeholder] of [[form.elements.panelId,targetPlaceholder],[filter,'全部面板']]){
       const previous=select.value;
       select.replaceChildren(new Option(placeholder,''));
       for(const panel of model.panels)select.add(new Option(panel.name,panel.id));
@@ -301,6 +338,7 @@
   }
   async function load(model,manual=false) {
     const id=++model.request,{ctx,root}=model,refresh=root.querySelector('[data-refresh]');
+    model.countController?.abort();
     refresh.disabled=true;model.refreshing=true;
     const [panels,rows]=await Promise.allSettled([ctx.api('/api/panels'),ctx.api('/api/lines')]);
     if(model.request!==id||!root.isConnected)return;
@@ -319,9 +357,17 @@
       const panelIds=new Set(model.panels.map(p=>p.id));
       model.lines=model.lines.filter(line=>panelIds.has(line.panelId));
     }
+    model.clientCounts=new Map(Object.entries(rows.status==='fulfilled'?rows.value.clientCounts || {}:{}));
+    model.lineCounts=null;
+    if(rows.status==='fulfilled'){
+      model.lineCounts=new Map();
+      for(const line of model.lines)model.lineCounts.set(line.panelId,(model.lineCounts.get(line.panelId) || 0)+1);
+    }
+    updateTargetLabels(model);
     ctx.state.error=errors.join(' · ');
     root.querySelector('.ln-alerts').innerHTML=[...new Set(errors)].map(e=>'<p>'+icon('circle-alert',15)+ctx.esc(e)+'</p>').join('');
     refresh.disabled=false;model.refreshing=false;drawLines(model);
+    void loadMissingClientCounts(model,id);
     if(manual&&!errors.length)ctx.toast('线路状态已刷新');
     const sync=document.getElementById('sync-label');
     if(sync){sync.classList.toggle('nx-sync-error',!!errors.length);sync.innerHTML='<i></i>'+(errors.length?'部分数据待同步':'最近同步 '+new Date().toLocaleTimeString('zh-CN',{hour12:false}));}
@@ -382,8 +428,9 @@
     const clients=form.querySelector('[data-clients]');
     const outcomes=new Map();
     let submitted=false,processing=false;
-    panel.add(new Option('请选择目标面板',''));
+    panel.add(new Option(targetPlaceholder,''));
     model.panels.forEach(p=>panel.add(new Option(p.name,p.id)));
+    updateTargetLabels(model);
     panel.value=active;
     const readLimits = bindLimits(form);
     function validate(){

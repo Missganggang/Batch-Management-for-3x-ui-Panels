@@ -10,6 +10,8 @@ chrono = "0.4"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rust_xlsxwriter = "=0.84.1"
 base64 = "0.22"
+ring = "0.17"
+zeroize = "1"
 subtle = "2.6"
 sha2 = "0.10"
 axum = "0.7"

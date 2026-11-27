@@ -79,9 +79,17 @@ async fn mock_panel(
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let temp = tempfile::tempdir().unwrap();
     let db = storage::open(temp.path()).await.unwrap();
-    let panel = storage::insert_panel(&db, "测试面板", &url, "", "test-only", "", "")
-        .await
-        .unwrap();
+    let panel = storage::Panel::from_form(
+        crate::PanelForm {
+            name: "测试面板".into(),
+            url,
+            token: "test-only".into(),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    storage::insert_panel(&db, &panel).await.unwrap();
     let app = Arc::new(App {
         db,
         client: reqwest::Client::new(),
